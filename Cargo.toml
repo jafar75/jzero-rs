@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/jzero-lexer",
+    "crates/jzero-parser"
 ]
 
 [workspace.package]
@@ -11,3 +12,6 @@ edition = "2024"
 
 [workspace.dependencies]
 logos = { version = "0.16" }
+cfgrammar = { version = "0.14" }
+lrpar = { version = "0.14" }
+lrlex = { version = "0.14" }
