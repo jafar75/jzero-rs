@@ -1,16 +1,12 @@
 [package]
 name = "jzero-parser"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-jzero-lexer = { path = "../jzero-lexer" }
-logos.workspace = true
-lrpar.workspace = true
-lrlex.workspace = true
-cfgrammar.workspace = true
+version = "0.1.0"
+edition = "2024"
 
 [build-dependencies]
-lrpar.workspace = true
-lrlex.workspace = true
-cfgrammar.workspace = true
+lalrpop.workspace = true
+
+[dependencies]
+lalrpop-util.workspace = true
+jzero-lexer = { path = "../jzero-lexer" }
+logos = "0.16"

@@ -1,0 +1,433 @@
+use crate::lexer::{Tok, LexicalError};
+
+grammar<'input>;
+
+extern {
+    type Location = usize;
+    type Error = LexicalError;
+
+    enum Tok<'input> {
+        "break" => Tok::Break,
+        "double" => Tok::Double,
+        "else" => Tok::Else,
+        "for" => Tok::For,
+        "if" => Tok::If,
+        "int" => Tok::Int,
+        "return" => Tok::Return,
+        "void" => Tok::Void,
+        "while" => Tok::While,
+        "identifier" => Tok::Identifier(<&'input str>),
+        "class" => Tok::Class,
+        "string" => Tok::StringKw,
+        "bool" => Tok::Bool,
+        "intlit" => Tok::IntLit(<&'input str>),
+        "doublelit" => Tok::DoubleLit(<&'input str>),
+        "stringlit" => Tok::StringLit(<&'input str>),
+        "boollit" => Tok::BoolLit(<bool>),
+        "null" => Tok::Null,
+        "<=" => Tok::LessEqual,
+        ">=" => Tok::GreaterEqual,
+        "==" => Tok::EqualEqual,
+        "!=" => Tok::NotEqual,
+        "&&" => Tok::LogicalAnd,
+        "||" => Tok::LogicalOr,
+        "+=" => Tok::PlusAssign,
+        "-=" => Tok::MinusAssign,
+        "public" => Tok::Public,
+        "static" => Tok::Static,
+        "(" => Tok::LParen,
+        ")" => Tok::RParen,
+        "{" => Tok::LBrace,
+        "}" => Tok::RBrace,
+        "[" => Tok::LBracket,
+        "]" => Tok::RBracket,
+        ";" => Tok::Semicolon,
+        "," => Tok::Comma,
+        "." => Tok::Dot,
+        "+" => Tok::Plus,
+        "-" => Tok::Minus,
+        "*" => Tok::Star,
+        "/" => Tok::Slash,
+        "%" => Tok::Percent,
+        "=" => Tok::Assign,
+        "!" => Tok::Bang,
+        "<" => Tok::Less,
+        ">" => Tok::Greater,
+    }
+}
+
+// ─── Top-level ───────────────────────────────────────────
+
+pub ClassDecl: () = "public" "class" "identifier" ClassBody => ();
+
+ClassBody: () = {
+    "{" ClassBodyDecls "}",
+    "{" "}",
+};
+
+ClassBodyDecls: () = {
+    ClassBodyDecl,
+    ClassBodyDecls ClassBodyDecl,
+};
+
+ClassBodyDecl: () = {
+    FieldDecl,
+    MethodDecl,
+    ConstructorDecl,
+};
+
+FieldDecl: () = Type VarDecls ";" => ();
+
+// Types: only primitive keywords and simple identifiers.
+// No QualifiedName here — dotted names are handled as expressions.
+Type: () = {
+    "int",
+    "double",
+    "bool",
+    "string",
+    "identifier" => (),
+};
+
+VarDecls: () = {
+    VarDeclarator,
+    VarDecls "," VarDeclarator,
+};
+
+VarDeclarator: () = {
+    "identifier" => (),
+    VarDeclarator "[" "]",
+};
+
+// ─── Methods and constructors ────────────────────────────
+
+MethodReturnVal: () = {
+    Type,
+    "void",
+};
+
+MethodDecl: () = MethodHeader Block => ();
+
+MethodHeader: () = "public" "static" MethodReturnVal MethodDeclarator => ();
+
+MethodDeclarator: () = "identifier" "(" FormalParmListOpt ")" => ();
+
+FormalParmListOpt: () = {
+    FormalParmList,
+    => (),
+};
+
+FormalParmList: () = {
+    FormalParm,
+    FormalParmList "," FormalParm,
+};
+
+FormalParm: () = Type VarDeclarator => ();
+
+ConstructorDecl: () = ConstructorDeclarator Block => ();
+
+ConstructorDeclarator: () = "identifier" "(" FormalParmListOpt ")" => ();
+
+// ─── Blocks and statements ──────────────────────────────
+
+Block: () = "{" BlockStmtsOpt "}" => ();
+
+BlockStmtsOpt: () = {
+    BlockStmts,
+    => (),
+};
+
+BlockStmts: () = {
+    BlockStmt,
+    BlockStmts BlockStmt,
+};
+
+// BlockStmt is left-factored to resolve the IDENTIFIER ambiguity.
+// When we see an IDENTIFIER at the start of a statement, we can't
+// tell if it's a type (for var decl) or expression (for method call,
+// assignment, etc.) until we see what follows.
+BlockStmt: () = {
+    // Unambiguous: primitive type starts a local var decl
+    PrimitiveType VarDecls ";",
+    // Ambiguous: IDENTIFIER could be type or expression — defer decision
+    "identifier" IdentifierStartedStmt,
+    // Everything else is a regular statement
+    Stmt,
+};
+
+// After seeing IDENTIFIER at the start of a BlockStmt, decide what it is:
+IdentifierStartedStmt: () = {
+    // It was a type name: IDENTIFIER VarDecls ";"
+    // VarDecls starts with VarDeclarator which starts with IDENTIFIER
+    "identifier" VarDeclRest,
+    // Array type: IDENTIFIER[] varname ...
+    "[" "]" VarDecls ";",
+    // It was an expression: assignment or method call
+    // Simple call: IDENTIFIER "(" ... ")" ";"
+    "(" ArgListOpt ")" ";",
+    // Brace call: IDENTIFIER "{" ... "}" ";"
+    "{" ArgListOpt "}" ";",
+    // Dotted: IDENTIFIER "." ...
+    "." "identifier" DotTail,
+    // Assignment: IDENTIFIER AssignOp Expr ";"
+    AssignOp Expr ";",
+};
+
+// After IDENTIFIER "identifier", we're in a var decl: type varname ...
+VarDeclRest: () = {
+    // Just "Type varname ;"
+    ";",
+    // "Type varname, more ;"
+    "," VarDecls ";",
+    // "Type varname[] ... ;"
+    "[" "]" ArrayVarDeclRest,
+};
+
+ArrayVarDeclRest: () = {
+    ";",
+    "," VarDecls ";",
+    "[" "]" ArrayVarDeclRest,
+};
+
+// After IDENTIFIER "." IDENTIFIER, figure out what the dotted thing is:
+DotTail: () = {
+    // Field/method chain continues: ... "." IDENTIFIER DotTail
+    "." "identifier" DotTail,
+    // Method call: ... "(" args ")" and then maybe more
+    "(" ArgListOpt ")" CallTail,
+    // Brace call: ... "{" args "}" and then maybe more
+    "{" ArgListOpt "}" CallTail,
+    // Assignment to field: ... AssignOp Expr ";"
+    AssignOp Expr ";",
+};
+
+// After a method call in statement position, what follows:
+CallTail: () = {
+    // Statement ends
+    ";",
+    // Chain continues: .method(...)
+    "." "identifier" DotTail,
+};
+
+PrimitiveType: () = {
+    "int",
+    "double",
+    "bool",
+    "string",
+};
+
+// Stmt covers everything that does NOT start with IDENTIFIER
+// (those are handled by the left-factored BlockStmt above).
+Stmt: () = {
+    Block,
+    ";",
+    BreakStmt,
+    ReturnStmt,
+    IfThenElseStmt,
+    IfThenStmt,
+    WhileStmt,
+    ForStmt,
+};
+
+// ─── If / else ──────────────────────────────────────────
+// Dangling-else resolved: IfThenElseStmt listed before IfThenStmt
+// so LALRPOP prefers the longer match.
+
+IfThenStmt: () = "if" "(" Expr ")" Block => ();
+
+IfThenElseStmt: () = "if" "(" Expr ")" Block "else" ElseBody => ();
+
+ElseBody: () = {
+    Block,
+    IfThenElseStmt,
+    IfThenStmt,
+};
+
+// ─── Loops ──────────────────────────────────────────────
+
+WhileStmt: () = "while" "(" Expr ")" Stmt => ();
+
+ForStmt: () = "for" "(" ForInit ";" ExprOpt ";" ForUpdate ")" Block => ();
+
+// ForInit left-factored: IDENTIFIER could start a type or a StmtExpr
+ForInit: () = {
+    PrimitiveType VarDecls,
+    "identifier" ForInitAfterIdent,
+    => (),
+};
+
+ForInitAfterIdent: () = {
+    // Type name: IDENTIFIER VarDecls
+    "identifier" ForInitVarDeclRest,
+    "[" "]" VarDecls,
+    // Method call: IDENTIFIER "(" ... ")"
+    "(" ArgListOpt ")",
+    "{" ArgListOpt "}",
+    // Dotted call/assign in for-init
+    "." "identifier" ForInitDotTail,
+    // Assignment: IDENTIFIER AssignOp Expr
+    AssignOp Expr,
+};
+
+ForInitVarDeclRest: () = {
+    => (),
+    "," VarDecls,
+    "[" "]" ForInitArrayVarDeclRest,
+};
+
+ForInitArrayVarDeclRest: () = {
+    => (),
+    "," VarDecls,
+    "[" "]" ForInitArrayVarDeclRest,
+};
+
+ForInitDotTail: () = {
+    "." "identifier" ForInitDotTail,
+    "(" ArgListOpt ")",
+    "{" ArgListOpt "}",
+    AssignOp Expr,
+};
+
+ExprOpt: () = {
+    Expr,
+    => (),
+};
+
+ForUpdate: () = {
+    StmtExprList,
+    => (),
+};
+
+StmtExprList: () = {
+    StmtExpr,
+    StmtExprList "," StmtExpr,
+};
+
+StmtExpr: () = {
+    AccessExpr,
+    AccessExpr AssignOp Expr,
+};
+
+// ─── Break / return ─────────────────────────────────────
+
+BreakStmt: () = {
+    "break" ";",
+    "break" "identifier" ";",
+};
+
+ReturnStmt: () = "return" ExprOpt ";" => ();
+
+// ─── Expressions ─────────────────────────────────────────
+// These are used inside parenthesized contexts (conditions, args, etc.)
+// where there's no type-vs-expression ambiguity.
+
+// Primary is split: AtomExpr handles the base cases, then
+// AccessExpr handles chained dots, method calls, and field accesses.
+// This avoids ambiguity between "identifier" as a Primary vs
+// "identifier" as the start of MethodCall.
+
+AtomExpr: () = {
+    Literal,
+    "identifier" => (),
+    "(" Expr ")",
+};
+
+Literal: () = {
+    "intlit" => (),
+    "doublelit" => (),
+    "boollit" => (),
+    "stringlit" => (),
+    "null",
+};
+
+// AccessExpr builds chains of field access and method calls
+// left-recursively, which LR parsers handle naturally.
+// Base cases: atom, or identifier with call parens/braces.
+// Recursive: AccessExpr "." "identifier" with optional call.
+
+AccessExpr: () = {
+    AtomExpr,
+    "identifier" "(" ArgListOpt ")",
+    "identifier" "{" ArgListOpt "}",
+    AccessExpr "." "identifier",
+    AccessExpr "." "identifier" "(" ArgListOpt ")",
+    AccessExpr "." "identifier" "{" ArgListOpt "}",
+};
+
+ArgListOpt: () = {
+    ArgList,
+    => (),
+};
+
+ArgList: () = {
+    Expr,
+    ArgList "," Expr,
+};
+
+UnaryExpr: () = {
+    "-" UnaryExpr,
+    "!" UnaryExpr,
+    AccessExpr,
+};
+
+MulExpr: () = {
+    UnaryExpr,
+    MulExpr "*" UnaryExpr,
+    MulExpr "/" UnaryExpr,
+    MulExpr "%" UnaryExpr,
+};
+
+AddExpr: () = {
+    MulExpr,
+    AddExpr "+" MulExpr,
+    AddExpr "-" MulExpr,
+};
+
+RelOp: () = {
+    "<=",
+    ">=",
+    "<",
+    ">",
+};
+
+RelExpr: () = {
+    AddExpr,
+    RelExpr RelOp AddExpr,
+};
+
+EqExpr: () = {
+    RelExpr,
+    EqExpr "==" RelExpr,
+    EqExpr "!=" RelExpr,
+};
+
+CondAndExpr: () = {
+    EqExpr,
+    CondAndExpr "&&" EqExpr,
+};
+
+CondOrExpr: () = {
+    CondAndExpr,
+    CondOrExpr "||" CondAndExpr,
+};
+
+Expr: () = {
+    CondOrExpr,
+    AccessExpr AssignOp Expr,
+};
+
+Assignment: () = LeftHandSide AssignOp Expr => ();
+
+// Left-hand side: simple identifier, or a dotted field access.
+// We can't use AccessExpr here because it would create an ambiguity
+// with the expression grammar (AccessExpr also appears in UnaryExpr).
+// Instead, LeftHandSide is only "identifier" — the dotted assignment
+// case like "obj.field = expr" is handled in IdentifierStartedStmt.
+LeftHandSide: () = {
+    "identifier" => (),
+};
+
+AssignOp: () = {
+    "=",
+    "+=",
+    "-=",
+};

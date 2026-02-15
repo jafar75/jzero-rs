@@ -15,7 +15,8 @@ The project follows the compilation pipeline, chapter by chapter:
 | Phase | Crate | Book Chapter | Status |
 |---|---|---|---|
 | Lexical Analysis | `jzero-lexer` | Ch. 3 | ✅ Done |
-| Parsing & AST | `jzero-parser` | Ch. 4–5 | ⬜ Planned |
+| Parsing (accept/reject) | `jzero-parser` | Ch. 4 | ✅ Done |
+| AST Construction | `jzero-parser` | Ch. 5 | ⬜ Planned |
 | Semantic Analysis | `jzero-semantic` | Ch. 6–7 | ⬜ Planned |
 | Code Generation | `jzero-codegen` | Ch. 8–9 | ⬜ Planned |
 | Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
@@ -29,7 +30,7 @@ jzero-rs/
 ├── Cargo.toml              # Workspace root
 ├── crates/
 │   ├── jzero-lexer/        # Lexical analysis (Logos)
-│   ├── jzero-parser/       # Parsing & AST construction
+│   ├── jzero-parser/       # Parsing & AST construction (LALRPOP)
 │   ├── jzero-semantic/     # Type checking & name resolution
 │   ├── jzero-codegen/      # Bytecode generation
 │   ├── jzero-vm/           # Bytecode interpreter
@@ -49,12 +50,27 @@ lexer → parser → semantic → codegen → vm
 
 ## Tool Mapping
 
-| Original (Book) | Rust Equivalent |
-|---|---|
-| JFlex (lexer generator) | Logos crate |
-| BYACC/J (parser generator) | TBD (lalrpop / pest / hand-written) |
-| Java bytecode | Custom bytecode format |
-| Java VM | Custom Rust VM |
+| Original (Book) | Rust Equivalent | Notes |
+|---|---|---|
+| JFlex (lexer generator) | [Logos](https://github.com/maciejhirsz/logos) | Derive-macro based, zero-copy |
+| BYACC/J (parser generator) | [LALRPOP](https://github.com/lalrpop/lalrpop) | LR(1) with lane table algorithm |
+| Java bytecode | Custom bytecode format | — |
+| Java VM | Custom Rust VM | — |
+
+## Parser Design Notes
+
+The book's BYACC/J grammar relies on LALR(1) with implicit shift-over-reduce conflict resolution. Adapting it to Rust required some significant changes:
+
+**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities (the `IDENTIFIER` at the start of a statement can begin either a type for variable declaration or an expression for method calls/assignments). grmtools' LALR parser resolved these conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
+
+**Key adaptations from the book grammar:**
+
+- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision until enough tokens disambiguate (e.g., a second `IDENTIFIER` means variable declaration, `"."` means field access/method call, `"("` means method call).
+- **Merged `FieldAccess`/`MethodCall` into `AccessExpr`** — a left-recursive rule that builds chains of `.field` and `.method(args)` accesses, avoiding the mutual recursion between `Primary`, `FieldAccess`, and `MethodCall` that caused conflicts.
+- **Removed `QualifiedName` from `Type`** — dotted names like `System.out` are handled purely as expression-level field accesses rather than as qualified type names, since Jzero doesn't need fully-qualified types.
+- **Removed standalone `InstantiationExpr`** — its production (`Name "(" ArgListOpt ")"`) was identical to one of `MethodCall`'s alternatives, creating a reduce/reduce conflict.
+
+The Logos lexer (`jzero-lexer`) feeds tokens into the LALRPOP parser through a thin adapter layer (`jzero-parser/src/lexer.rs`) that wraps bare `Token` variants with borrowed string slices for value-bearing tokens (identifiers, literals).
 
 ## Building & Testing
 
@@ -67,6 +83,7 @@ cargo test
 
 # Test a specific crate
 cargo test -p jzero-lexer
+cargo test -p jzero-parser
 ```
 
 ## Example
@@ -85,3 +102,4 @@ public class hello {
 
 - [*Build Your Own Programming Language (Edition 2)*](https://a.co/d/0hHvJYWA) — Clinton L. Jeffery
 - [Logos](https://github.com/maciejhirsz/logos) — fast lexer generator for Rust
+- [LALRPOP](https://github.com/lalrpop/lalrpop) — LR(1) parser generator for Rust
