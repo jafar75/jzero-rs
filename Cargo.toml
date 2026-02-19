@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "crates/jzero-lexer",
-    "crates/jzero-parser"
+    "crates/jzero-parser",
+    "crates/jzero-ast",
 ]
 
 [workspace.package]

@@ -9,4 +9,4 @@ lalrpop.workspace = true
 [dependencies]
 lalrpop-util.workspace = true
 jzero-lexer = { path = "../jzero-lexer" }
-logos = "0.16"
+logos.workspace = true
