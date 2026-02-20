@@ -1,0 +1,12 @@
+[package]
+name = "jzero-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "j0"
+path = "src/main.rs"
+
+[dependencies]
+jzero-parser = { path = "../jzero-parser" }
+jzero-ast = { path = "../jzero-ast" }

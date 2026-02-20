@@ -9,4 +9,5 @@ lalrpop.workspace = true
 [dependencies]
 lalrpop-util.workspace = true
 jzero-lexer = { path = "../jzero-lexer" }
+jzero-ast = { path = "../jzero-ast" }
 logos.workspace = true

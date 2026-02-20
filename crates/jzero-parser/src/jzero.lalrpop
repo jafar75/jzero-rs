@@ -1,6 +1,9 @@
+use crate::action::TreeAction;
 use crate::lexer::{Tok, LexicalError};
+use crate::loc::line_from_offset;
+use jzero_ast::tree::Tree;
 
-grammar<'input>;
+grammar<'input>(input: &'input str);
 
 extern {
     type Location = usize;
@@ -58,376 +61,592 @@ extern {
 
 // ─── Top-level ───────────────────────────────────────────
 
-pub ClassDecl: () = "public" "class" "identifier" ClassBody => ();
-
-ClassBody: () = {
-    "{" ClassBodyDecls "}",
-    "{" "}",
+pub ClassDecl: Tree = {
+    "public" "class" <l:@L> <name:"identifier"> <body:ClassBody> => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(body);
+        Tree::new("ClassDecl", 0, kids)
+    },
 };
 
-ClassBodyDecls: () = {
-    ClassBodyDecl,
-    ClassBodyDecls ClassBodyDecl,
+ClassBody: Vec<Tree> = {
+    "{" <decls:ClassBodyDecls> "}" => decls,
+    "{" "}" => vec![],
 };
 
-ClassBodyDecl: () = {
-    FieldDecl,
-    MethodDecl,
-    ConstructorDecl,
+ClassBodyDecls: Vec<Tree> = {
+    <d:ClassBodyDecl> => vec![d],
+    <mut ds:ClassBodyDecls> <d:ClassBodyDecl> => { ds.push(d); ds },
 };
 
-FieldDecl: () = Type VarDecls ";" => ();
-
-// Types: only primitive keywords and simple identifiers.
-// No QualifiedName here — dotted names are handled as expressions.
-Type: () = {
-    "int",
-    "double",
-    "bool",
-    "string",
-    "identifier" => (),
+ClassBodyDecl: Tree = {
+    FieldDecl => <>,
+    MethodDecl => <>,
+    ConstructorDecl => <>,
 };
 
-VarDecls: () = {
-    VarDeclarator,
-    VarDecls "," VarDeclarator,
+FieldDecl: Tree = {
+    <ty:Type> <decls:VarDecls> ";" =>
+        Tree::new("FieldDecl", 0, { let mut v = vec![ty]; v.extend(decls); v }),
 };
 
-VarDeclarator: () = {
-    "identifier" => (),
-    VarDeclarator "[" "]",
+Type: Tree = {
+    <l:@L> "int" => Tree::leaf("INT", "int", line_from_offset(input, l)),
+    <l:@L> "double" => Tree::leaf("DOUBLE", "double", line_from_offset(input, l)),
+    <l:@L> "bool" => Tree::leaf("BOOL", "bool", line_from_offset(input, l)),
+    <l:@L> "string" => Tree::leaf("STRING", "string", line_from_offset(input, l)),
+    <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
+};
+
+VarDecls: Vec<Tree> = {
+    <d:VarDeclarator> => vec![d],
+    <mut ds:VarDecls> "," <d:VarDeclarator> => { ds.push(d); ds },
+};
+
+VarDeclarator: Tree = {
+    <l:@L> <name:"identifier"> =>
+        Tree::new("VarDeclarator", 0, vec![Tree::leaf("IDENTIFIER", name, line_from_offset(input, l))]),
+    <vd:VarDeclarator> "[" "]" =>
+        Tree::new("VarDeclarator", 1, vec![vd]),
 };
 
 // ─── Methods and constructors ────────────────────────────
 
-MethodReturnVal: () = {
-    Type,
-    "void",
+MethodReturnVal: Tree = {
+    Type => <>,
+    <l:@L> "void" => Tree::leaf("VOID", "void", line_from_offset(input, l)),
 };
 
-MethodDecl: () = MethodHeader Block => ();
-
-MethodHeader: () = "public" "static" MethodReturnVal MethodDeclarator => ();
-
-MethodDeclarator: () = "identifier" "(" FormalParmListOpt ")" => ();
-
-FormalParmListOpt: () = {
-    FormalParmList,
-    => (),
+MethodDecl: Tree = {
+    <hdr:MethodHeader> <body:Block> =>
+        Tree::new("MethodDecl", 0, vec![hdr, body]),
 };
 
-FormalParmList: () = {
-    FormalParm,
-    FormalParmList "," FormalParm,
+MethodHeader: Tree = {
+    "public" "static" <ret:MethodReturnVal> <decl:MethodDeclarator> =>
+        Tree::new("MethodHeader", 0, vec![ret, decl]),
 };
 
-FormalParm: () = Type VarDeclarator => ();
+MethodDeclarator: Tree = {
+    <l:@L> <name:"identifier"> "(" <params:FormalParmListOpt> ")" => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(params);
+        Tree::new("MethodDeclarator", 0, kids)
+    },
+};
 
-ConstructorDecl: () = ConstructorDeclarator Block => ();
+FormalParmListOpt: Vec<Tree> = {
+    <list:FormalParmList> => list,
+    => vec![],
+};
 
-ConstructorDeclarator: () = "identifier" "(" FormalParmListOpt ")" => ();
+FormalParmList: Vec<Tree> = {
+    <p:FormalParm> => vec![p],
+    <mut ps:FormalParmList> "," <p:FormalParm> => { ps.push(p); ps },
+};
+
+FormalParm: Tree = {
+    <ty:Type> <vd:VarDeclarator> =>
+        Tree::new("FormalParm", 0, vec![ty, vd]),
+};
+
+ConstructorDecl: Tree = {
+    <decl:ConstructorDeclarator> <body:Block> =>
+        Tree::new("ConstructorDecl", 0, vec![decl, body]),
+};
+
+ConstructorDeclarator: Tree = {
+    <l:@L> <name:"identifier"> "(" <params:FormalParmListOpt> ")" => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(params);
+        Tree::new("ConstructorDeclarator", 0, kids)
+    },
+};
 
 // ─── Blocks and statements ──────────────────────────────
 
-Block: () = "{" BlockStmtsOpt "}" => ();
-
-BlockStmtsOpt: () = {
-    BlockStmts,
-    => (),
+Block: Tree = {
+    "{" <stmts:BlockStmtsOpt> "}" =>
+        Tree::new("Block", 0, stmts),
 };
 
-BlockStmts: () = {
-    BlockStmt,
-    BlockStmts BlockStmt,
+BlockStmtsOpt: Vec<Tree> = {
+    <stmts:BlockStmts> => stmts,
+    => vec![],
+};
+
+BlockStmts: Vec<Tree> = {
+    <s:BlockStmt> => vec![s],
+    <mut ss:BlockStmts> <s:BlockStmt> => { ss.push(s); ss },
 };
 
 // BlockStmt is left-factored to resolve the IDENTIFIER ambiguity.
-// When we see an IDENTIFIER at the start of a statement, we can't
-// tell if it's a type (for var decl) or expression (for method call,
-// assignment, etc.) until we see what follows.
-BlockStmt: () = {
-    // Unambiguous: primitive type starts a local var decl
-    PrimitiveType VarDecls ";",
-    // Ambiguous: IDENTIFIER could be type or expression — defer decision
-    "identifier" IdentifierStartedStmt,
-    // Everything else is a regular statement
-    Stmt,
+BlockStmt: Tree = {
+    <ty:PrimitiveType> <decls:VarDecls> ";" =>
+        Tree::new("LocalVarDecl", 0, { let mut v = vec![ty]; v.extend(decls); v }),
+    <l:@L> <name:"identifier"> <rest:IdentifierStartedStmt> => {
+        let id = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        rest.apply(id)
+    },
+    Stmt => <>,
 };
 
-// After seeing IDENTIFIER at the start of a BlockStmt, decide what it is:
-IdentifierStartedStmt: () = {
-    // It was a type name: IDENTIFIER VarDecls ";"
-    // VarDecls starts with VarDeclarator which starts with IDENTIFIER
-    "identifier" VarDeclRest,
-    // Array type: IDENTIFIER[] varname ...
-    "[" "]" VarDecls ";",
-    // It was an expression: assignment or method call
-    // Simple call: IDENTIFIER "(" ... ")" ";"
-    "(" ArgListOpt ")" ";",
-    // Brace call: IDENTIFIER "{" ... "}" ";"
-    "{" ArgListOpt "}" ";",
-    // Dotted: IDENTIFIER "." ...
-    "." "identifier" DotTail,
-    // Assignment: IDENTIFIER AssignOp Expr ";"
-    AssignOp Expr ";",
+// IdentifierStartedStmt returns a closure that takes the leading IDENTIFIER
+// leaf and produces the final statement Tree node.
+IdentifierStartedStmt: TreeAction<'input> = {
+    // Variable declaration: Type varname ...;
+    <l:@L> <varname:"identifier"> <rest:VarDeclRest> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |type_id: Tree| {
+            let vd_name = Tree::leaf("IDENTIFIER", varname, line);
+            let first_vd = Tree::new("VarDeclarator", 0, vec![vd_name]);
+            let mut kids = vec![type_id, first_vd];
+            kids.extend(rest);
+            Tree::new("LocalVarDecl", 0, kids)
+        })
+    },
+    // Array type: IDENTIFIER[] VarDecls ;
+    "[" "]" <decls:VarDecls> ";" => {
+        TreeAction::new(move |type_id: Tree| {
+            let arr_type = Tree::new("ArrayType", 0, vec![type_id]);
+            let mut kids = vec![arr_type];
+            kids.extend(decls);
+            Tree::new("LocalVarDecl", 1, kids)
+        })
+    },
+    // Simple call: IDENTIFIER(args);
+    "(" <args:ArgListOpt> ")" ";" => {
+        TreeAction::new(move |name_id: Tree| {
+            let mut kids = vec![name_id];
+            kids.extend(args);
+            Tree::new("MethodCall", 0, kids)
+        })
+    },
+    // Brace call: IDENTIFIER{args};
+    "{" <args:ArgListOpt> "}" ";" => {
+        TreeAction::new(move |name_id: Tree| {
+            let mut kids = vec![name_id];
+            kids.extend(args);
+            Tree::new("MethodCall", 1, kids)
+        })
+    },
+    // Dotted: IDENTIFIER.identifier DotTail
+    "." <l:@L> <field:"identifier"> <tail:DotTail> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |base_id: Tree| {
+            let field_leaf = Tree::leaf("IDENTIFIER", field, line);
+            let access = Tree::new("FieldAccess", 0, vec![base_id, field_leaf]);
+            tail.apply(access)
+        })
+    },
+    // Assignment: IDENTIFIER AssignOp Expr ;
+    <op:AssignOp> <rhs:Expr> ";" => {
+        TreeAction::new(move |name_id: Tree| {
+            Tree::new("Assignment", 0, vec![name_id, op, rhs])
+        })
+    },
 };
 
-// After IDENTIFIER "identifier", we're in a var decl: type varname ...
-VarDeclRest: () = {
-    // Just "Type varname ;"
-    ";",
-    // "Type varname, more ;"
-    "," VarDecls ";",
-    // "Type varname[] ... ;"
-    "[" "]" ArrayVarDeclRest,
+VarDeclRest: Vec<Tree> = {
+    ";" => vec![],
+    "," <decls:VarDecls> ";" => decls,
+    "[" "]" <rest:ArrayVarDeclRest> => {
+        // First var declarator gets array brackets
+        rest
+    },
 };
 
-ArrayVarDeclRest: () = {
-    ";",
-    "," VarDecls ";",
-    "[" "]" ArrayVarDeclRest,
+ArrayVarDeclRest: Vec<Tree> = {
+    ";" => vec![],
+    "," <decls:VarDecls> ";" => decls,
+    "[" "]" <rest:ArrayVarDeclRest> => rest,
 };
 
-// After IDENTIFIER "." IDENTIFIER, figure out what the dotted thing is:
-DotTail: () = {
-    // Field/method chain continues: ... "." IDENTIFIER DotTail
-    "." "identifier" DotTail,
-    // Method call: ... "(" args ")" and then maybe more
-    "(" ArgListOpt ")" CallTail,
-    // Brace call: ... "{" args "}" and then maybe more
-    "{" ArgListOpt "}" CallTail,
-    // Assignment to field: ... AssignOp Expr ";"
-    AssignOp Expr ";",
+// DotTail returns a closure: takes the AccessExpr built so far, returns final stmt Tree.
+DotTail: TreeAction<'input> = {
+    // Chain continues: .identifier DotTail
+    "." <l:@L> <field:"identifier"> <tail:DotTail> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |base: Tree| {
+            let field_leaf = Tree::leaf("IDENTIFIER", field, line);
+            let access = Tree::new("FieldAccess", 0, vec![base, field_leaf]);
+            tail.apply(access)
+        })
+    },
+    // Method call: (args) CallTail
+    "(" <args:ArgListOpt> ")" <tail:CallTail> => {
+        TreeAction::new(move |base: Tree| {
+            let mut kids = vec![base];
+            kids.extend(args);
+            let call = Tree::new("MethodCall", 0, kids);
+            tail.apply(call)
+        })
+    },
+    // Brace call: {args} CallTail
+    "{" <args:ArgListOpt> "}" <tail:CallTail> => {
+        TreeAction::new(move |base: Tree| {
+            let mut kids = vec![base];
+            kids.extend(args);
+            let call = Tree::new("MethodCall", 1, kids);
+            tail.apply(call)
+        })
+    },
+    // Assignment to field: AssignOp Expr ;
+    <op:AssignOp> <rhs:Expr> ";" => {
+        TreeAction::new(move |base: Tree| {
+            Tree::new("Assignment", 0, vec![base, op, rhs])
+        })
+    },
 };
 
-// After a method call in statement position, what follows:
-CallTail: () = {
+// CallTail: after a method call in statement position.
+CallTail: TreeAction<'input> = {
     // Statement ends
-    ";",
-    // Chain continues: .method(...)
-    "." "identifier" DotTail,
+    ";" => TreeAction::new(|call: Tree| call),
+    // Chain continues: .identifier DotTail
+    "." <l:@L> <field:"identifier"> <tail:DotTail> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |call: Tree| {
+            let field_leaf = Tree::leaf("IDENTIFIER", field, line);
+            let access = Tree::new("FieldAccess", 0, vec![call, field_leaf]);
+            tail.apply(access)
+        })
+    },
 };
 
-PrimitiveType: () = {
-    "int",
-    "double",
-    "bool",
-    "string",
+PrimitiveType: Tree = {
+    <l:@L> "int" => Tree::leaf("INT", "int", line_from_offset(input, l)),
+    <l:@L> "double" => Tree::leaf("DOUBLE", "double", line_from_offset(input, l)),
+    <l:@L> "bool" => Tree::leaf("BOOL", "bool", line_from_offset(input, l)),
+    <l:@L> "string" => Tree::leaf("STRING", "string", line_from_offset(input, l)),
 };
 
-// Stmt covers everything that does NOT start with IDENTIFIER
-// (those are handled by the left-factored BlockStmt above).
-Stmt: () = {
-    Block,
-    ";",
-    BreakStmt,
-    ReturnStmt,
-    IfThenElseStmt,
-    IfThenStmt,
-    WhileStmt,
-    ForStmt,
+Stmt: Tree = {
+    Block => <>,
+    <l:@L> ";" => Tree::new("EmptyStmt", 0, vec![]),
+    BreakStmt => <>,
+    ReturnStmt => <>,
+    IfThenElseStmt => <>,
+    IfThenStmt => <>,
+    WhileStmt => <>,
+    ForStmt => <>,
 };
 
 // ─── If / else ──────────────────────────────────────────
-// Dangling-else resolved: IfThenElseStmt listed before IfThenStmt
-// so LALRPOP prefers the longer match.
 
-IfThenStmt: () = "if" "(" Expr ")" Block => ();
+IfThenStmt: Tree = {
+    "if" "(" <cond:Expr> ")" <body:Block> =>
+        Tree::new("IfThenStmt", 0, vec![cond, body]),
+};
 
-IfThenElseStmt: () = "if" "(" Expr ")" Block "else" ElseBody => ();
+IfThenElseStmt: Tree = {
+    "if" "(" <cond:Expr> ")" <then_body:Block> "else" <else_body:ElseBody> =>
+        Tree::new("IfThenElseStmt", 0, vec![cond, then_body, else_body]),
+};
 
-ElseBody: () = {
-    Block,
-    IfThenElseStmt,
-    IfThenStmt,
+ElseBody: Tree = {
+    Block => <>,
+    IfThenElseStmt => <>,
+    IfThenStmt => <>,
 };
 
 // ─── Loops ──────────────────────────────────────────────
 
-WhileStmt: () = "while" "(" Expr ")" Stmt => ();
-
-ForStmt: () = "for" "(" ForInit ";" ExprOpt ";" ForUpdate ")" Block => ();
-
-// ForInit left-factored: IDENTIFIER could start a type or a StmtExpr
-ForInit: () = {
-    PrimitiveType VarDecls,
-    "identifier" ForInitAfterIdent,
-    => (),
+WhileStmt: Tree = {
+    "while" "(" <cond:Expr> ")" <body:Stmt> =>
+        Tree::new("WhileStmt", 0, vec![cond, body]),
 };
 
-ForInitAfterIdent: () = {
+ForStmt: Tree = {
+    "for" "(" <init:ForInit> ";" <cond:ExprOpt> ";" <upd:ForUpdate> ")" <body:Block> => {
+        let mut kids = Vec::new();
+        if let Some(i) = init { kids.push(i); } else { kids.push(Tree::new("EmptyForInit", 0, vec![])); }
+        if let Some(c) = cond { kids.push(c); } else { kids.push(Tree::new("EmptyExpr", 0, vec![])); }
+        if let Some(u) = upd { kids.push(u); } else { kids.push(Tree::new("EmptyForUpdate", 0, vec![])); }
+        kids.push(body);
+        Tree::new("ForStmt", 0, kids)
+    },
+};
+
+ForInit: Option<Tree> = {
+    <ty:PrimitiveType> <decls:VarDecls> => {
+        let mut kids = vec![ty];
+        kids.extend(decls);
+        Some(Tree::new("LocalVarDecl", 0, kids))
+    },
+    <l:@L> <name:"identifier"> <rest:ForInitAfterIdent> => {
+        let id = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        Some(rest.apply(id))
+    },
+    => None,
+};
+
+ForInitAfterIdent: TreeAction<'input> = {
     // Type name: IDENTIFIER VarDecls
-    "identifier" ForInitVarDeclRest,
-    "[" "]" VarDecls,
-    // Method call: IDENTIFIER "(" ... ")"
-    "(" ArgListOpt ")",
-    "{" ArgListOpt "}",
+    <l:@L> <varname:"identifier"> <rest:ForInitVarDeclRest> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |type_id: Tree| {
+            let vd_name = Tree::leaf("IDENTIFIER", varname, line);
+            let first_vd = Tree::new("VarDeclarator", 0, vec![vd_name]);
+            let mut kids = vec![type_id, first_vd];
+            kids.extend(rest);
+            Tree::new("LocalVarDecl", 0, kids)
+        })
+    },
+    "[" "]" <decls:VarDecls> => {
+        TreeAction::new(move |type_id: Tree| {
+            let arr_type = Tree::new("ArrayType", 0, vec![type_id]);
+            let mut kids = vec![arr_type];
+            kids.extend(decls);
+            Tree::new("LocalVarDecl", 1, kids)
+        })
+    },
+    // Method call: IDENTIFIER(args)
+    "(" <args:ArgListOpt> ")" => {
+        TreeAction::new(move |name_id: Tree| {
+            let mut kids = vec![name_id];
+            kids.extend(args);
+            Tree::new("MethodCall", 0, kids)
+        })
+    },
+    "{" <args:ArgListOpt> "}" => {
+        TreeAction::new(move |name_id: Tree| {
+            let mut kids = vec![name_id];
+            kids.extend(args);
+            Tree::new("MethodCall", 1, kids)
+        })
+    },
     // Dotted call/assign in for-init
-    "." "identifier" ForInitDotTail,
+    "." <l:@L> <field:"identifier"> <tail:ForInitDotTail> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |base_id: Tree| {
+            let field_leaf = Tree::leaf("IDENTIFIER", field, line);
+            let access = Tree::new("FieldAccess", 0, vec![base_id, field_leaf]);
+            tail.apply(access)
+        })
+    },
     // Assignment: IDENTIFIER AssignOp Expr
-    AssignOp Expr,
+    <op:AssignOp> <rhs:Expr> => {
+        TreeAction::new(move |name_id: Tree| {
+            Tree::new("Assignment", 0, vec![name_id, op, rhs])
+        })
+    },
 };
 
-ForInitVarDeclRest: () = {
-    => (),
-    "," VarDecls,
-    "[" "]" ForInitArrayVarDeclRest,
+ForInitVarDeclRest: Vec<Tree> = {
+    => vec![],
+    "," <decls:VarDecls> => decls,
+    "[" "]" <rest:ForInitArrayVarDeclRest> => rest,
 };
 
-ForInitArrayVarDeclRest: () = {
-    => (),
-    "," VarDecls,
-    "[" "]" ForInitArrayVarDeclRest,
+ForInitArrayVarDeclRest: Vec<Tree> = {
+    => vec![],
+    "," <decls:VarDecls> => decls,
+    "[" "]" <rest:ForInitArrayVarDeclRest> => rest,
 };
 
-ForInitDotTail: () = {
-    "." "identifier" ForInitDotTail,
-    "(" ArgListOpt ")",
-    "{" ArgListOpt "}",
-    AssignOp Expr,
+ForInitDotTail: TreeAction<'input> = {
+    "." <l:@L> <field:"identifier"> <tail:ForInitDotTail> => {
+        let line = line_from_offset(input, l);
+        TreeAction::new(move |base: Tree| {
+            let field_leaf = Tree::leaf("IDENTIFIER", field, line);
+            let access = Tree::new("FieldAccess", 0, vec![base, field_leaf]);
+            tail.apply(access)
+        })
+    },
+    "(" <args:ArgListOpt> ")" => {
+        TreeAction::new(move |base: Tree| {
+            let mut kids = vec![base];
+            kids.extend(args);
+            Tree::new("MethodCall", 0, kids)
+        })
+    },
+    "{" <args:ArgListOpt> "}" => {
+        TreeAction::new(move |base: Tree| {
+            let mut kids = vec![base];
+            kids.extend(args);
+            Tree::new("MethodCall", 1, kids)
+        })
+    },
+    <op:AssignOp> <rhs:Expr> => {
+        TreeAction::new(move |base: Tree| {
+            Tree::new("Assignment", 0, vec![base, op, rhs])
+        })
+    },
 };
 
-ExprOpt: () = {
-    Expr,
-    => (),
+ExprOpt: Option<Tree> = {
+    <e:Expr> => Some(e),
+    => None,
 };
 
-ForUpdate: () = {
-    StmtExprList,
-    => (),
+ForUpdate: Option<Tree> = {
+    <list:StmtExprList> => Some(list),
+    => None,
 };
 
-StmtExprList: () = {
-    StmtExpr,
-    StmtExprList "," StmtExpr,
+StmtExprList: Tree = {
+    <e:StmtExpr> => e,
+    <list:StmtExprList> "," <e:StmtExpr> =>
+        Tree::new("StmtExprList", 0, vec![list, e]),
 };
 
-StmtExpr: () = {
-    AccessExpr,
-    AccessExpr AssignOp Expr,
+StmtExpr: Tree = {
+    AccessExpr => <>,
+    <lhs:AccessExpr> <op:AssignOp> <rhs:Expr> =>
+        Tree::new("Assignment", 0, vec![lhs, op, rhs]),
 };
 
 // ─── Break / return ─────────────────────────────────────
 
-BreakStmt: () = {
-    "break" ";",
-    "break" "identifier" ";",
+BreakStmt: Tree = {
+    "break" ";" => Tree::new("BreakStmt", 0, vec![]),
+    "break" <l:@L> <label:"identifier"> ";" =>
+        Tree::new("BreakStmt", 1, vec![Tree::leaf("IDENTIFIER", label, line_from_offset(input, l))]),
 };
 
-ReturnStmt: () = "return" ExprOpt ";" => ();
+ReturnStmt: Tree = {
+    "return" <e:ExprOpt> ";" => {
+        match e {
+            Some(expr) => Tree::new("ReturnStmt", 0, vec![expr]),
+            None => Tree::new("ReturnStmt", 1, vec![]),
+        }
+    },
+};
 
 // ─── Expressions ─────────────────────────────────────────
-// These are used inside parenthesized contexts (conditions, args, etc.)
-// where there's no type-vs-expression ambiguity.
 
-// Primary is split: AtomExpr handles the base cases, then
-// AccessExpr handles chained dots, method calls, and field accesses.
-// This avoids ambiguity between "identifier" as a Primary vs
-// "identifier" as the start of MethodCall.
-
-AtomExpr: () = {
-    Literal,
-    "identifier" => (),
-    "(" Expr ")",
+AtomExpr: Tree = {
+    Literal => <>,
+    <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
+    "(" <e:Expr> ")" => e,
 };
 
-Literal: () = {
-    "intlit" => (),
-    "doublelit" => (),
-    "boollit" => (),
-    "stringlit" => (),
-    "null",
+Literal: Tree = {
+    <l:@L> <v:"intlit"> => Tree::leaf("INTLIT", v, line_from_offset(input, l)),
+    <l:@L> <v:"doublelit"> => Tree::leaf("DOUBLELIT", v, line_from_offset(input, l)),
+    <l:@L> <v:"boollit"> => Tree::leaf("BOOLLIT", if v { "true" } else { "false" }, line_from_offset(input, l)),
+    <l:@L> <v:"stringlit"> => Tree::leaf("STRINGLIT", v, line_from_offset(input, l)),
+    <l:@L> "null" => Tree::leaf("NULL", "null", line_from_offset(input, l)),
 };
 
-// AccessExpr builds chains of field access and method calls
-// left-recursively, which LR parsers handle naturally.
-// Base cases: atom, or identifier with call parens/braces.
-// Recursive: AccessExpr "." "identifier" with optional call.
-
-AccessExpr: () = {
-    AtomExpr,
-    "identifier" "(" ArgListOpt ")",
-    "identifier" "{" ArgListOpt "}",
-    AccessExpr "." "identifier",
-    AccessExpr "." "identifier" "(" ArgListOpt ")",
-    AccessExpr "." "identifier" "{" ArgListOpt "}",
+AccessExpr: Tree = {
+    AtomExpr => <>,
+    <l:@L> <name:"identifier"> "(" <args:ArgListOpt> ")" => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(args);
+        Tree::new("MethodCall", 0, kids)
+    },
+    <l:@L> <name:"identifier"> "{" <args:ArgListOpt> "}" => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(args);
+        Tree::new("MethodCall", 1, kids)
+    },
+    <base:AccessExpr> "." <l:@L> <field:"identifier"> =>
+        Tree::new("FieldAccess", 0, vec![base, Tree::leaf("IDENTIFIER", field, line_from_offset(input, l))]),
+    <base:AccessExpr> "." <l:@L> <method:"identifier"> "(" <args:ArgListOpt> ")" => {
+        let m = Tree::leaf("IDENTIFIER", method, line_from_offset(input, l));
+        let mut kids = vec![base, m];
+        kids.extend(args);
+        Tree::new("MethodCall", 2, kids)
+    },
+    <base:AccessExpr> "." <l:@L> <method:"identifier"> "{" <args:ArgListOpt> "}" => {
+        let m = Tree::leaf("IDENTIFIER", method, line_from_offset(input, l));
+        let mut kids = vec![base, m];
+        kids.extend(args);
+        Tree::new("MethodCall", 3, kids)
+    },
 };
 
-ArgListOpt: () = {
-    ArgList,
-    => (),
+ArgListOpt: Vec<Tree> = {
+    <list:ArgList> => list,
+    => vec![],
 };
 
-ArgList: () = {
-    Expr,
-    ArgList "," Expr,
+ArgList: Vec<Tree> = {
+    <e:Expr> => vec![e],
+    <mut es:ArgList> "," <e:Expr> => { es.push(e); es },
 };
 
-UnaryExpr: () = {
-    "-" UnaryExpr,
-    "!" UnaryExpr,
-    AccessExpr,
+UnaryExpr: Tree = {
+    <l:@L> "-" <e:UnaryExpr> =>
+        Tree::new("UnaryMinus", 0, vec![e]),
+    <l:@L> "!" <e:UnaryExpr> =>
+        Tree::new("UnaryNot", 0, vec![e]),
+    AccessExpr => <>,
 };
 
-MulExpr: () = {
-    UnaryExpr,
-    MulExpr "*" UnaryExpr,
-    MulExpr "/" UnaryExpr,
-    MulExpr "%" UnaryExpr,
+MulExpr: Tree = {
+    UnaryExpr => <>,
+    <lhs:MulExpr> <l:@L> "*" <rhs:UnaryExpr> =>
+        Tree::new("MulExpr", 0, vec![lhs, Tree::leaf("STAR", "*", line_from_offset(input, l)), rhs]),
+    <lhs:MulExpr> <l:@L> "/" <rhs:UnaryExpr> =>
+        Tree::new("MulExpr", 1, vec![lhs, Tree::leaf("SLASH", "/", line_from_offset(input, l)), rhs]),
+    <lhs:MulExpr> <l:@L> "%" <rhs:UnaryExpr> =>
+        Tree::new("MulExpr", 2, vec![lhs, Tree::leaf("PERCENT", "%", line_from_offset(input, l)), rhs]),
 };
 
-AddExpr: () = {
-    MulExpr,
-    AddExpr "+" MulExpr,
-    AddExpr "-" MulExpr,
+AddExpr: Tree = {
+    MulExpr => <>,
+    <lhs:AddExpr> <l:@L> "+" <rhs:MulExpr> =>
+        Tree::new("AddExpr", 0, vec![lhs, Tree::leaf("PLUS", "+", line_from_offset(input, l)), rhs]),
+    <lhs:AddExpr> <l:@L> "-" <rhs:MulExpr> =>
+        Tree::new("AddExpr", 1, vec![lhs, Tree::leaf("MINUS", "-", line_from_offset(input, l)), rhs]),
 };
 
-RelOp: () = {
-    "<=",
-    ">=",
-    "<",
-    ">",
+RelOp: Tree = {
+    <l:@L> "<=" => Tree::leaf("LESSEQUAL", "<=", line_from_offset(input, l)),
+    <l:@L> ">=" => Tree::leaf("GREATEREQUAL", ">=", line_from_offset(input, l)),
+    <l:@L> "<" => Tree::leaf("LESS", "<", line_from_offset(input, l)),
+    <l:@L> ">" => Tree::leaf("GREATER", ">", line_from_offset(input, l)),
 };
 
-RelExpr: () = {
-    AddExpr,
-    RelExpr RelOp AddExpr,
+RelExpr: Tree = {
+    AddExpr => <>,
+    <lhs:RelExpr> <op:RelOp> <rhs:AddExpr> =>
+        Tree::new("RelExpr", 0, vec![lhs, op, rhs]),
 };
 
-EqExpr: () = {
-    RelExpr,
-    EqExpr "==" RelExpr,
-    EqExpr "!=" RelExpr,
+EqExpr: Tree = {
+    RelExpr => <>,
+    <lhs:EqExpr> <l:@L> "==" <rhs:RelExpr> =>
+        Tree::new("EqExpr", 0, vec![lhs, Tree::leaf("EQUALEQUAL", "==", line_from_offset(input, l)), rhs]),
+    <lhs:EqExpr> <l:@L> "!=" <rhs:RelExpr> =>
+        Tree::new("EqExpr", 1, vec![lhs, Tree::leaf("NOTEQUAL", "!=", line_from_offset(input, l)), rhs]),
 };
 
-CondAndExpr: () = {
-    EqExpr,
-    CondAndExpr "&&" EqExpr,
+CondAndExpr: Tree = {
+    EqExpr => <>,
+    <lhs:CondAndExpr> <l:@L> "&&" <rhs:EqExpr> =>
+        Tree::new("CondAndExpr", 0, vec![lhs, Tree::leaf("LOGICALAND", "&&", line_from_offset(input, l)), rhs]),
 };
 
-CondOrExpr: () = {
-    CondAndExpr,
-    CondOrExpr "||" CondAndExpr,
+CondOrExpr: Tree = {
+    CondAndExpr => <>,
+    <lhs:CondOrExpr> <l:@L> "||" <rhs:CondAndExpr> =>
+        Tree::new("CondOrExpr", 0, vec![lhs, Tree::leaf("LOGICALOR", "||", line_from_offset(input, l)), rhs]),
 };
 
-Expr: () = {
-    CondOrExpr,
-    AccessExpr AssignOp Expr,
+Expr: Tree = {
+    CondOrExpr => <>,
+    <lhs:AccessExpr> <op:AssignOp> <rhs:Expr> =>
+        Tree::new("Assignment", 0, vec![lhs, op, rhs]),
 };
 
-Assignment: () = LeftHandSide AssignOp Expr => ();
+Assignment: Tree = <lhs:LeftHandSide> <op:AssignOp> <rhs:Expr> =>
+    Tree::new("Assignment", 0, vec![lhs, op, rhs]);
 
-// Left-hand side: simple identifier, or a dotted field access.
-// We can't use AccessExpr here because it would create an ambiguity
-// with the expression grammar (AccessExpr also appears in UnaryExpr).
-// Instead, LeftHandSide is only "identifier" — the dotted assignment
-// case like "obj.field = expr" is handled in IdentifierStartedStmt.
-LeftHandSide: () = {
-    "identifier" => (),
+LeftHandSide: Tree = {
+    <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
 };
 
-AssignOp: () = {
-    "=",
-    "+=",
-    "-=",
+AssignOp: Tree = {
+    <l:@L> "=" => Tree::leaf("ASSIGN", "=", line_from_offset(input, l)),
+    <l:@L> "+=" => Tree::leaf("PLUSASSIGN", "+=", line_from_offset(input, l)),
+    <l:@L> "-=" => Tree::leaf("MINUSASSIGN", "-=", line_from_offset(input, l)),
 };

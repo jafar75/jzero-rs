@@ -108,19 +108,27 @@ impl Tree {
         buf
     }
 
+    /// Escape a string for use inside DOT double-quoted labels.
+    fn dot_escape(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+
     /// Emit node declarations.
     fn dot_nodes(&self, buf: &mut String) {
         if let Some(ref tok) = self.tok {
+            let escaped = Self::dot_escape(&tok.text);
             // Leaf node: two labels like the book
             // First: compact label with text and id
             buf.push_str(&fmt::format(format_args!(
                 "N{} [shape=box label=\"{}:{} id {}\"];\n",
-                self.id, tok.text, tok.category, self.id
+                self.id, escaped, tok.category, self.id
             )));
             // Second: dotted-style detailed label
             buf.push_str(&fmt::format(format_args!(
                 "N{} [shape=box style=dotted label=\" {} \\n text = {} \\l lineno = {} \\l\"];\n",
-                self.id, tok.category, tok.text, tok.lineno
+                self.id, tok.category, escaped, tok.lineno
             )));
         } else {
             // Internal node

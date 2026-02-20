@@ -16,7 +16,7 @@ The project follows the compilation pipeline, chapter by chapter:
 |---|---|---|---|
 | Lexical Analysis | `jzero-lexer` | Ch. 3 | ✅ Done |
 | Parsing (accept/reject) | `jzero-parser` | Ch. 4 | ✅ Done |
-| AST Construction | `jzero-parser` | Ch. 5 | ⬜ Planned |
+| Syntax Tree Construction | `jzero-ast`, `jzero-parser` | Ch. 5 | ✅ Done |
 | Semantic Analysis | `jzero-semantic` | Ch. 6–7 | ⬜ Planned |
 | Code Generation | `jzero-codegen` | Ch. 8–9 | ⬜ Planned |
 | Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
@@ -30,7 +30,9 @@ jzero-rs/
 ├── Cargo.toml              # Workspace root
 ├── crates/
 │   ├── jzero-lexer/        # Lexical analysis (Logos)
-│   ├── jzero-parser/       # Parsing & AST construction (LALRPOP)
+│   ├── jzero-parser/       # Parsing & syntax tree construction (LALRPOP)
+│   ├── jzero-ast/          # Syntax tree data structures & DOT output
+│   ├── jzero-cli/          # CLI tool (j0) for parsing and tree visualization
 │   ├── jzero-semantic/     # Type checking & name resolution
 │   ├── jzero-codegen/      # Bytecode generation
 │   ├── jzero-vm/           # Bytecode interpreter
@@ -46,6 +48,8 @@ lexer → parser → semantic → codegen → vm
           ↑          ↑          ↑       ↑
           └──────────┴──────────┴───────┘
                       common
+          ↑
+          ast
 ```
 
 ## Tool Mapping
@@ -54,8 +58,66 @@ lexer → parser → semantic → codegen → vm
 |---|---|---|
 | JFlex (lexer generator) | [Logos](https://github.com/maciejhirsz/logos) | Derive-macro based, zero-copy |
 | BYACC/J (parser generator) | [LALRPOP](https://github.com/lalrpop/lalrpop) | LR(1) with lane table algorithm |
+| `tree.java` / `tree.icn` | `jzero-ast` crate | Uniform `Tree` struct with DOT output |
+| Graphviz DOT visualization | Graphviz (same) | CLI tool generates `.dot` files |
 | Java bytecode | Custom bytecode format | — |
 | Java VM | Custom Rust VM | — |
+
+## Syntax Tree (Chapter 5)
+
+The parser builds a **syntax tree** (not a full parse tree) during parsing. Internal nodes are only created when a grammar rule has two or more children — single-child productions pass through without creating a node, keeping the tree compact.
+
+The tree uses a uniform node structure (`jzero_ast::tree::Tree`):
+
+- **Leaf nodes** hold token information (category, source text, line number)
+- **Internal nodes** hold a production rule name, rule alternative number, and child nodes
+
+Left-factored grammar rules (like `IdentifierStartedStmt` and `DotTail`) use deferred closures (`TreeAction`) to reconstruct logical tree nodes such as `MethodCall`, `FieldAccess`, and `Assignment`, hiding the left-factoring from the tree structure.
+
+### Tree visualization
+
+The CLI tool `j0` parses a Jzero source file and produces both text output and a Graphviz DOT file:
+
+```bash
+# Parse and print tree + write DOT file
+cargo run --bin j0 -- tests/hello.java
+
+# Also render to PNG (requires Graphviz)
+cargo run --bin j0 -- tests/hello.java --png
+```
+
+Example output for `hello.java`:
+
+```
+ClassDecl#0 (2 kids)
+  [IDENTIFIER] hello (line 1)
+  MethodDecl#0 (2 kids)
+    MethodHeader#0 (2 kids)
+      [VOID] void (line 2)
+      MethodDeclarator#0 (2 kids)
+        [IDENTIFIER] main (line 2)
+        FormalParm#0 (2 kids)
+          [IDENTIFIER] String (line 2)
+          VarDeclarator#1 (1 kids)
+            VarDeclarator#0 (1 kids)
+              [IDENTIFIER] argv (line 2)
+    Block#0 (1 kids)
+      MethodCall#0 (2 kids)
+        FieldAccess#0 (2 kids)
+          FieldAccess#0 (2 kids)
+            [IDENTIFIER] System (line 3)
+            [IDENTIFIER] out (line 3)
+          [IDENTIFIER] println (line 3)
+        [STRINGLIT] "hello, jzero!" (line 3)
+```
+
+### Differences from the book's tree
+
+The tree is structurally equivalent to the book's output with a few minor differences due to grammar adaptations:
+
+- **`FieldAccess` instead of `QualifiedName`** — dotted names like `System.out` are represented as nested `FieldAccess` nodes rather than `QualifiedName` chains, since we removed `QualifiedName` from the grammar in Chapter 4.
+- **`ClassBody` is flattened** — the book has an explicit `ClassBody#0` node; ours folds its children directly into `ClassDecl`.
+- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly record array brackets, whereas the book uses a single node.
 
 ## Parser Design Notes
 
@@ -84,6 +146,10 @@ cargo test
 # Test a specific crate
 cargo test -p jzero-lexer
 cargo test -p jzero-parser
+cargo test -p jzero-ast
+
+# Parse a Jzero source file and visualize the syntax tree
+cargo run --bin j0 -- tests/hello.java --png
 ```
 
 ## Example
