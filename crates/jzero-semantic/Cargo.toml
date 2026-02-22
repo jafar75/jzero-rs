@@ -1,0 +1,11 @@
+[package]
+name = "jzero-semantic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jzero-ast    = { path = "../jzero-ast" }
+jzero-symtab = { path = "../jzero-symtab" }
+
+[dev-dependencies]
+jzero-parser = { path = "../jzero-parser" }

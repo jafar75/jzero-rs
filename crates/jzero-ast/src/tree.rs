@@ -1,5 +1,9 @@
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
+
+use jzero_symtab::SymTab;
 
 /// Global counter for unique node IDs (used in DOT output).
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -39,6 +43,13 @@ pub struct LeafToken {
 /// Single-child productions do NOT create a node — the child
 /// is passed through directly. This makes it a *syntax tree*
 /// (not a full parse tree).
+///
+/// # Semantic attributes (Chapter 6+)
+///
+/// - `is_const`: synthesized — true if this subtree is a compile-time constant.
+///   Computed bottom-up by `jzero-semantic`.
+/// - `stab`: inherited — the nearest enclosing scope's symbol table.
+///   Propagated top-down by `jzero-semantic`; `None` until semantic analysis runs.
 #[derive(Debug, Clone)]
 pub struct Tree {
     /// Unique node ID for DOT output.
@@ -53,6 +64,14 @@ pub struct Tree {
     pub tok: Option<LeafToken>,
     /// Child nodes.
     pub kids: Vec<Tree>,
+
+    // ─── Semantic attributes ─────────────────────────────
+    /// Synthesized attribute: true if this node is a compile-time constant.
+    /// `None` until computed by semantic analysis.
+    pub is_const: Option<bool>,
+    /// Inherited attribute: the nearest enclosing scope's symbol table.
+    /// `None` until populated by semantic analysis.
+    pub stab: Option<Rc<RefCell<SymTab>>>,
 }
 
 impl Tree {
@@ -71,6 +90,8 @@ impl Tree {
                 lineno,
             }),
             kids: Vec::new(),
+            is_const: None,
+            stab: None,
         }
     }
 
@@ -88,12 +109,26 @@ impl Tree {
             nkids,
             tok: None,
             kids,
+            is_const: None,
+            stab: None,
         }
     }
 
     /// Returns true if this is a leaf node.
     pub fn is_leaf(&self) -> bool {
         self.tok.is_some()
+    }
+
+    // ─── Semantic attribute helpers ───────────────────────
+
+    /// Attach a symbol table to this node (sets the `stab` attribute).
+    pub fn set_stab(&mut self, st: Rc<RefCell<SymTab>>) {
+        self.stab = Some(st);
+    }
+
+    /// Set the `is_const` synthesized attribute.
+    pub fn set_const(&mut self, val: bool) {
+        self.is_const = Some(val);
     }
 
     // ─── DOT output ──────────────────────────────────────
@@ -120,21 +155,24 @@ impl Tree {
         if let Some(ref tok) = self.tok {
             let escaped = Self::dot_escape(&tok.text);
             // Leaf node: two labels like the book
-            // First: compact label with text and id
             buf.push_str(&fmt::format(format_args!(
                 "N{} [shape=box label=\"{}:{} id {}\"];\n",
                 self.id, escaped, tok.category, self.id
             )));
-            // Second: dotted-style detailed label
             buf.push_str(&fmt::format(format_args!(
                 "N{} [shape=box style=dotted label=\" {} \\n text = {} \\l lineno = {} \\l\"];\n",
                 self.id, tok.category, escaped, tok.lineno
             )));
         } else {
-            // Internal node
+            // Internal node — include is_const in label if computed
+            let const_label = match self.is_const {
+                Some(true)  => " ✓const",
+                Some(false) => "",
+                None        => "",
+            };
             buf.push_str(&fmt::format(format_args!(
-                "N{} [shape=box label=\"{}#{}\"];\n",
-                self.id, self.sym, self.rule
+                "N{} [shape=box label=\"{}#{}{}\"];\n",
+                self.id, self.sym, self.rule, const_label
             )));
         }
 
@@ -168,9 +206,14 @@ impl Tree {
                 pad, tok.category, tok.text, tok.lineno
             )));
         } else {
+            let const_label = match self.is_const {
+                Some(true)  => " [const]",
+                Some(false) => "",
+                None        => "",
+            };
             buf.push_str(&fmt::format(format_args!(
-                "{}{}#{} ({} kids)\n",
-                pad, self.sym, self.rule, self.nkids
+                "{}{}#{} ({} kids){}\n",
+                pad, self.sym, self.rule, self.nkids, const_label
             )));
         }
         for kid in &self.kids {
@@ -198,30 +241,47 @@ mod tests {
         assert_eq!(leaf.nkids, 0);
         assert_eq!(leaf.tok.as_ref().unwrap().text, "hello");
         assert_eq!(leaf.tok.as_ref().unwrap().lineno, 1);
+        assert!(leaf.is_const.is_none());
+        assert!(leaf.stab.is_none());
     }
 
     #[test]
     fn test_internal_node() {
         reset_ids();
-        let left = Tree::leaf("IDENTIFIER", "x", 1);
-        let op = Tree::leaf("ASSIGN", "=", 1);
+        let left  = Tree::leaf("IDENTIFIER", "x", 1);
+        let op    = Tree::leaf("ASSIGN", "=", 1);
         let right = Tree::leaf("INTLIT", "42", 1);
         let assign = Tree::new("Assignment", 0, vec![left, op, right]);
         assert!(!assign.is_leaf());
         assert_eq!(assign.nkids, 3);
-        assert_eq!(assign.kids.len(), 3);
+        assert!(assign.is_const.is_none());
+        assert!(assign.stab.is_none());
     }
 
     #[test]
     fn test_single_child_passthrough() {
-        // Demonstrates that single-child rules should NOT create nodes.
-        // The parser action code will just use `=> <>` to pass through.
         reset_ids();
         let leaf = Tree::leaf("INTLIT", "42", 1);
-        // Instead of: Tree::new("Expr", 0, vec![leaf])
-        // We just pass `leaf` through directly.
         assert!(leaf.is_leaf());
         assert_eq!(leaf.sym, "INTLIT");
+    }
+
+    #[test]
+    fn test_set_const() {
+        reset_ids();
+        let mut lit = Tree::leaf("INTLIT", "42", 1);
+        lit.set_const(true);
+        assert_eq!(lit.is_const, Some(true));
+    }
+
+    #[test]
+    fn test_set_stab() {
+        reset_ids();
+        let st = SymTab::new("global", None).into_rc();
+        let mut node = Tree::new("ClassDecl", 0, vec![]);
+        node.set_stab(Rc::clone(&st));
+        assert!(node.stab.is_some());
+        assert_eq!(node.stab.as_ref().unwrap().borrow().scope, "global");
     }
 
     #[test]
@@ -243,13 +303,22 @@ mod tests {
     fn test_text_output() {
         reset_ids();
         let name = Tree::leaf("IDENTIFIER", "x", 1);
-        let val = Tree::leaf("INTLIT", "42", 1);
-        let op = Tree::leaf("ASSIGN", "=", 1);
+        let val  = Tree::leaf("INTLIT", "42", 1);
+        let op   = Tree::leaf("ASSIGN", "=", 1);
         let assign = Tree::new("Assignment", 0, vec![name, op, val]);
 
         let text = assign.to_text(0);
         assert!(text.contains("Assignment#0"));
         assert!(text.contains("[IDENTIFIER] x"));
         assert!(text.contains("[INTLIT] 42"));
+    }
+
+    #[test]
+    fn test_const_label_in_text_output() {
+        reset_ids();
+        let mut node = Tree::new("AddExpr", 0, vec![]);
+        node.set_const(true);
+        let text = node.to_text(0);
+        assert!(text.contains("[const]"));
     }
 }

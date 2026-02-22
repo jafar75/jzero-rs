@@ -2,9 +2,11 @@
 resolver = "2"
 members = [
     "crates/jzero-lexer",
+    "crates/jzero-symtab",
     "crates/jzero-parser",
     "crates/jzero-ast",
     "crates/jzero-cli",
+    "crates/jzero-semantic",
 ]
 
 [workspace.package]
