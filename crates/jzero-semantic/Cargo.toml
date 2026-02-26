@@ -9,3 +9,4 @@ jzero-symtab = { path = "../jzero-symtab" }
 
 [dev-dependencies]
 jzero-parser = { path = "../jzero-parser" }
+jzero-symtab = { path = "../jzero-symtab" }

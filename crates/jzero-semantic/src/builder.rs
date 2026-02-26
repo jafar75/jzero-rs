@@ -17,6 +17,7 @@ use std::rc::Rc;
 use jzero_ast::tree::Tree;
 use jzero_symtab::{SymTab, SymTabEntry, entry::SymbolKind};
 
+use crate::calctype::{calc_type, assign_type};
 use crate::error::SemanticError;
 
 // ─── Public entry point ───────────────────────────────────────────────────────
@@ -212,10 +213,18 @@ fn walk_formal_parm(
     if tree.kids.len() < 2 {
         return;
     }
+
+    // Phase 4: synthesize type from kids[0], inherit into kids[1]
+    let typ = calc_type(&mut tree.kids[0], errors);
+    let final_typ = typ.and_then(|t| assign_type(&mut tree.kids[1], t, errors));
+
     let ident_node = &tree.kids[1];
     let (name, lineno) = ident_name_and_line(ident_node);
 
-    let entry = SymTabEntry::new(&name, SymbolKind::Param, Rc::clone(&scope), false);
+    let mut entry = SymTabEntry::new(&name, SymbolKind::Param, Rc::clone(&scope), false);
+    if let Some(t) = final_typ {
+        entry.set_typ(t);
+    }
     if let Err(_) = scope.borrow_mut().insert(entry) {
         errors.push(SemanticError::RedeclaredVariable { name, lineno });
     }
@@ -247,10 +256,18 @@ fn walk_local_var_decl(
     if tree.kids.len() < 2 {
         return;
     }
+
+    // Phase 4: synthesize type from kids[0], inherit into kids[1]
+    let typ = calc_type(&mut tree.kids[0], errors);
+    let final_typ = typ.and_then(|t| assign_type(&mut tree.kids[1], t, errors));
+
     let var_decl = &tree.kids[1];
     let (name, lineno) = declarator_name_and_line(var_decl);
 
-    let entry = SymTabEntry::new(&name, SymbolKind::Local, Rc::clone(&scope), false);
+    let mut entry = SymTabEntry::new(&name, SymbolKind::Local, Rc::clone(&scope), false);
+    if let Some(t) = final_typ {
+        entry.set_typ(t);
+    }
     if let Err(_) = scope.borrow_mut().insert(entry) {
         errors.push(SemanticError::RedeclaredVariable { name, lineno });
     }

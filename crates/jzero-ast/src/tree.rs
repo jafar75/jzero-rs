@@ -3,7 +3,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use jzero_symtab::SymTab;
+use jzero_symtab::{SymTab, TypeInfo};
 
 /// Global counter for unique node IDs (used in DOT output).
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -72,6 +72,9 @@ pub struct Tree {
     /// Inherited attribute: the nearest enclosing scope's symbol table.
     /// `None` until populated by semantic analysis.
     pub stab: Option<Rc<RefCell<SymTab>>>,
+    /// The type of the value this node computes or declares.
+    /// `None` until populated by type analysis (Chapter 7).
+    pub typ: Option<TypeInfo>,
 }
 
 impl Tree {
@@ -92,6 +95,7 @@ impl Tree {
             kids: Vec::new(),
             is_const: None,
             stab: None,
+            typ: None,
         }
     }
 
@@ -111,6 +115,7 @@ impl Tree {
             kids,
             is_const: None,
             stab: None,
+            typ: None,
         }
     }
 
@@ -129,6 +134,11 @@ impl Tree {
     /// Set the `is_const` synthesized attribute.
     pub fn set_const(&mut self, val: bool) {
         self.is_const = Some(val);
+    }
+
+    /// Set the `typ` attribute (type of the value this node computes).
+    pub fn set_typ(&mut self, t: TypeInfo) {
+        self.typ = Some(t);
     }
 
     // ─── DOT output ──────────────────────────────────────
@@ -264,6 +274,18 @@ mod tests {
         let leaf = Tree::leaf("INTLIT", "42", 1);
         assert!(leaf.is_leaf());
         assert_eq!(leaf.sym, "INTLIT");
+    }
+
+    #[test]
+    fn test_set_typ() {
+        reset_ids();
+        let mut lit = Tree::leaf("INTLIT", "42", 1);
+        lit.set_typ(TypeInfo::int());
+        assert_eq!(lit.typ.as_ref().unwrap().basetype(), "int");
+
+        let mut node = Tree::new("AddExpr", 0, vec![]);
+        node.set_typ(TypeInfo::double());
+        assert_eq!(node.typ.as_ref().unwrap().basetype(), "double");
     }
 
     #[test]

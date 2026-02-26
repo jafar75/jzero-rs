@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::symtab::SymTab;
+use crate::typeinfo::TypeInfo;
 
 /// The kind of a symbol — determines what fields are relevant.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +39,9 @@ pub struct SymTabEntry {
     pub is_const: bool,
     /// What kind of symbol this is.
     pub kind: SymbolKind,
+    /// The declared type of this symbol.
+    /// `None` until populated by semantic analysis (Chapter 7).
+    pub typ: Option<TypeInfo>,
 }
 
 impl SymTabEntry {
@@ -54,6 +58,7 @@ impl SymTabEntry {
             st: None,
             is_const,
             kind,
+            typ: None,
         }
     }
 
@@ -71,6 +76,12 @@ impl SymTabEntry {
             st: Some(child),
             is_const,
             kind,
+            typ: None,
         }
+    }
+
+    /// Set the type of this symbol.
+    pub fn set_typ(&mut self, t: TypeInfo) {
+        self.typ = Some(t);
     }
 }

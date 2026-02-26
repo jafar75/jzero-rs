@@ -107,7 +107,9 @@ impl ClassType {
 
 impl fmt::Display for ClassType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "class({})", self.name)
+        // Display as just the name so Array(ClassType("String")) prints "String[]"
+        // matching the book's typecheck output format.
+        write!(f, "{}", self.name)
     }
 }
 
@@ -249,7 +251,9 @@ mod tests {
     fn test_class_type() {
         let t = TypeInfo::class("hello");
         assert_eq!(t.basetype(), "hello");
-        assert_eq!(t.to_string(), "class(hello)");
+        // Display uses the class name directly (not "class(hello)")
+        // so Array(ClassType) prints as "hello[]" not "class(hello)[]"
+        assert_eq!(t.to_string(), "hello");
     }
 
     #[test]

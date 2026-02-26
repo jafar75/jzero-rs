@@ -11,6 +11,11 @@ pub enum SemanticError {
         name: String,
         lineno: usize,
     },
+    /// A type could not be assigned to a declarator node.
+    TypeAssignmentError {
+        msg: String,
+        lineno: usize,
+    },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -20,6 +25,8 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "line {}: undeclared variable '{}'", lineno, name),
             SemanticError::RedeclaredVariable { name, lineno } =>
                 write!(f, "line {}: redeclared variable '{}'", lineno, name),
+            SemanticError::TypeAssignmentError { msg, lineno } =>
+                write!(f, "line {}: type assignment error: {}", lineno, msg),
         }
     }
 }
