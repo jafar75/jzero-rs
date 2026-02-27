@@ -6,8 +6,8 @@ mod tests {
     // ─── Helper ───────────────────────────────────────────────────────────────
 
     fn run(src: &str) -> crate::SemanticResult {
-        let mut tree = parse_tree(src).expect("parse failed");
-        analyze(&mut tree)
+        let mut tree = jzero_parser::parse_tree(src).expect("parse failed");
+        crate::analyze(&mut tree)
     }
 
     // ─── Symbol table structure ───────────────────────────────────────────────

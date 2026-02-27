@@ -17,8 +17,10 @@ The project follows the compilation pipeline, chapter by chapter:
 | Lexical Analysis | `jzero-lexer` | Ch. 3 | ✅ Done |
 | Parsing (accept/reject) | `jzero-parser` | Ch. 4 | ✅ Done |
 | Syntax Tree Construction | `jzero-ast`, `jzero-parser` | Ch. 5 | ✅ Done |
-| Semantic Analysis | `jzero-semantic` | Ch. 6–7 | ⬜ Planned |
-| Code Generation | `jzero-codegen` | Ch. 8–9 | ⬜ Planned |
+| Symbol Tables | `jzero-symtab`, `jzero-semantic` | Ch. 6 | ✅ Done |
+| Type Checking (base types) | `jzero-semantic` | Ch. 7 | ✅ Done |
+| Type Checking (arrays, methods) | `jzero-semantic` | Ch. 8 | ⬜ Planned |
+| Code Generation | `jzero-codegen` | Ch. 9 | ⬜ Planned |
 | Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
 
 ## Architecture
@@ -32,11 +34,11 @@ jzero-rs/
 │   ├── jzero-lexer/        # Lexical analysis (Logos)
 │   ├── jzero-parser/       # Parsing & syntax tree construction (LALRPOP)
 │   ├── jzero-ast/          # Syntax tree data structures & DOT output
+│   ├── jzero-symtab/       # Symbol table types (SymTab, SymTabEntry, TypeInfo)
 │   ├── jzero-cli/          # CLI tool (j0) for parsing and tree visualization
-│   ├── jzero-semantic/     # Type checking & name resolution
-│   ├── jzero-codegen/      # Bytecode generation
-│   ├── jzero-vm/           # Bytecode interpreter
-│   └── jzero-common/       # Shared types (errors, source spans)
+│   ├── jzero-semantic/     # Symbol table construction & type checking
+│   ├── jzero-codegen/      # Bytecode generation (planned)
+│   └── jzero-vm/           # Bytecode interpreter (planned)
 └── tests/
     └── samples/            # Jzero source files for testing
 ```
@@ -44,12 +46,19 @@ jzero-rs/
 Each crate enforces a clean one-way dependency chain:
 
 ```
-lexer → parser → semantic → codegen → vm
-          ↑          ↑          ↑       ↑
-          └──────────┴──────────┴───────┘
-                      common
-          ↑
-          ast
+jzero-lexer
+     ↓
+jzero-symtab   (no external deps — TypeInfo, SymTab, SymTabEntry)
+     ↓
+jzero-ast      (Tree + semantic attributes: stab, typ, is_const)
+     ↓
+jzero-parser   (LALRPOP grammar → Tree)
+     ↓
+jzero-semantic (symbol table construction + type checking)
+     ↓
+jzero-codegen  (planned)
+     ↓
+jzero-vm       (planned)
 ```
 
 ## Tool Mapping
@@ -59,9 +68,104 @@ lexer → parser → semantic → codegen → vm
 | JFlex (lexer generator) | [Logos](https://github.com/maciejhirsz/logos) | Derive-macro based, zero-copy |
 | BYACC/J (parser generator) | [LALRPOP](https://github.com/lalrpop/lalrpop) | LR(1) with lane table algorithm |
 | `tree.java` / `tree.icn` | `jzero-ast` crate | Uniform `Tree` struct with DOT output |
+| `symtab.java` / `symtab_entry.java` | `jzero-symtab` crate | Rust enum-based type hierarchy |
+| `typeinfo.java` + subclasses | `TypeInfo` enum | `Base`, `Array`, `Method`, `Class` variants |
 | Graphviz DOT visualization | Graphviz (same) | CLI tool generates `.dot` files |
-| Java bytecode | Custom bytecode format | — |
-| Java VM | Custom Rust VM | — |
+| Java bytecode | Custom bytecode format (planned) | — |
+| Java VM | Custom Rust VM (planned) | — |
+
+## Semantic Analysis (Chapters 6–7)
+
+Semantic analysis runs in four phases, all implemented in `jzero-semantic`:
+
+### Phase 1 — Symbol table construction (Ch. 6)
+
+A two-pass tree traversal builds one `SymTab` per scope:
+
+- **First pass** over each class body registers all field and method signatures upfront, allowing forward references within a class.
+- **Second pass** walks method bodies to insert parameters and local variables.
+- The predefined `System.out.println` hierarchy is inserted into the global scope before the user's code is walked.
+- Each `Tree` node gets its `stab` field set to the nearest enclosing scope's symbol table (an inherited attribute, propagated top-down).
+
+Errors detected: **redeclared variables**.
+
+Example symbol table output for `hello.java`:
+
+```
+global - 2 symbols
+ hello
+  class - 2 symbols
+   main
+    method - 0 symbols
+   System
+ System
+  class - 1 symbols
+   out
+    class - 1 symbols
+     println
+```
+
+### Phase 2 — Leaf type assignment (Ch. 7)
+
+A pre-order pass stamps `typ` on all literal and operator leaf nodes before any expression checking:
+
+| Token | Type |
+|---|---|
+| `INTLIT` | `int` |
+| `DOUBLELIT` | `double` |
+| `STRINGLIT` | `String` |
+| `BOOLLIT` | `boolean` |
+| `NULL` | `null` |
+| operators (`+`, `-`, `=`, …) | `n/a` |
+
+### Phase 3 — Declaration type assignment (Ch. 7)
+
+Two cooperative traversals process `FieldDecl`, `LocalVarDecl`, and `FormalParm` nodes:
+
+- **`calc_type`** (post-order) synthesizes a `TypeInfo` from the `Type` child node — resolving keywords (`int`, `void`, …) and identifiers (user-defined class types) into `TypeInfo` values.
+- **`assign_type`** (top-down) inherits the resolved type downward through `VarDeclarator` nodes, wrapping in `TypeInfo::Array(...)` when array brackets are present, and finally storing the type in the corresponding `SymTabEntry`.
+
+### Phase 4 — Expression type checking (Ch. 7)
+
+A selective traversal checks types in method bodies using three cooperative functions:
+
+- **`check_type`** — dispatches on node type to compute and verify the type of each expression.
+- **`check_kids`** — controls which children are visited (e.g. only the body of a `MethodDecl`, not its header).
+- **`check_types`** — enforces operator-specific type compatibility rules and records each result.
+
+Results are collected as `Vec<TypeCheckResult>` with the format:
+
+```
+line 4: typecheck = on a int and a int -> OK
+line 5: typecheck + on a String and a int -> FAIL
+```
+
+Both OK and FAIL results are collected — the compiler reports all type errors in one pass.
+
+### TypeInfo hierarchy
+
+The book's `typeinfo` class hierarchy is represented as a single Rust enum in `jzero-symtab`:
+
+```rust
+pub enum TypeInfo {
+    Base(String),       // "int", "double", "boolean", "String", "void", "null", "n/a"
+    Array(Box<TypeInfo>),
+    Method(MethodType), // return_type + Vec<Parameter>
+    Class(ClassType),   // name + optional SymTab reference
+}
+```
+
+### Semantic attributes on Tree nodes
+
+Two semantic attributes were added to `Tree` in Chapter 6–7:
+
+| Field | Kind | Description |
+|---|---|---|
+| `stab: Option<Rc<RefCell<SymTab>>>` | Inherited | Nearest enclosing scope's symbol table |
+| `is_const: Option<bool>` | Synthesized | Whether this subtree is a compile-time constant |
+| `typ: Option<TypeInfo>` | Synthesized | The type of the value this node computes |
+
+All fields default to `None` — the parser remains unaware of semantic concerns.
 
 ## Syntax Tree (Chapter 5)
 
@@ -147,6 +251,8 @@ cargo test
 cargo test -p jzero-lexer
 cargo test -p jzero-parser
 cargo test -p jzero-ast
+cargo test -p jzero-symtab
+cargo test -p jzero-semantic
 
 # Parse a Jzero source file and visualize the syntax tree
 cargo run --bin j0 -- tests/hello.java --png
