@@ -16,6 +16,7 @@ extern {
         "for" => Tok::For,
         "if" => Tok::If,
         "int" => Tok::Int,
+        "new" => Tok::New,           // ← NEW
         "return" => Tok::Return,
         "void" => Tok::Void,
         "while" => Tok::While,
@@ -183,7 +184,6 @@ BlockStmts: Vec<Tree> = {
     <mut ss:BlockStmts> <s:BlockStmt> => { ss.push(s); ss },
 };
 
-// BlockStmt is left-factored to resolve the IDENTIFIER ambiguity.
 BlockStmt: Tree = {
     <ty:PrimitiveType> <decls:VarDecls> ";" =>
         Tree::new("LocalVarDecl", 0, { let mut v = vec![ty]; v.extend(decls); v }),
@@ -191,13 +191,12 @@ BlockStmt: Tree = {
         let id = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
         rest.apply(id)
     },
+    // Array creation as statement: new int[3];  (rare but legal)
+    <e:NewExpr> ";" => e,
     Stmt => <>,
 };
 
-// IdentifierStartedStmt returns a closure that takes the leading IDENTIFIER
-// leaf and produces the final statement Tree node.
 IdentifierStartedStmt: TreeAction<'input> = {
-    // Variable declaration: Type varname ...;
     <l:@L> <varname:"identifier"> <rest:VarDeclRest> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |type_id: Tree| {
@@ -208,7 +207,6 @@ IdentifierStartedStmt: TreeAction<'input> = {
             Tree::new("LocalVarDecl", 0, kids)
         })
     },
-    // Array type: IDENTIFIER[] VarDecls ;
     "[" "]" <decls:VarDecls> ";" => {
         TreeAction::new(move |type_id: Tree| {
             let arr_type = Tree::new("ArrayType", 0, vec![type_id]);
@@ -217,7 +215,6 @@ IdentifierStartedStmt: TreeAction<'input> = {
             Tree::new("LocalVarDecl", 1, kids)
         })
     },
-    // Simple call: IDENTIFIER(args);
     "(" <args:ArgListOpt> ")" ";" => {
         TreeAction::new(move |name_id: Tree| {
             let mut kids = vec![name_id];
@@ -225,7 +222,6 @@ IdentifierStartedStmt: TreeAction<'input> = {
             Tree::new("MethodCall", 0, kids)
         })
     },
-    // Brace call: IDENTIFIER{args};
     "{" <args:ArgListOpt> "}" ";" => {
         TreeAction::new(move |name_id: Tree| {
             let mut kids = vec![name_id];
@@ -233,7 +229,6 @@ IdentifierStartedStmt: TreeAction<'input> = {
             Tree::new("MethodCall", 1, kids)
         })
     },
-    // Dotted: IDENTIFIER.identifier DotTail
     "." <l:@L> <field:"identifier"> <tail:DotTail> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |base_id: Tree| {
@@ -242,7 +237,13 @@ IdentifierStartedStmt: TreeAction<'input> = {
             tail.apply(access)
         })
     },
-    // Assignment: IDENTIFIER AssignOp Expr ;
+    // Array element assignment as statement: arr[i] = expr;
+    "[" <idx:Expr> "]" <op:AssignOp> <rhs:Expr> ";" => {
+        TreeAction::new(move |base_id: Tree| {
+            let access = Tree::new("ArrayAccess", 0, vec![base_id, idx]);
+            Tree::new("Assignment", 0, vec![access, op, rhs])
+        })
+    },
     <op:AssignOp> <rhs:Expr> ";" => {
         TreeAction::new(move |name_id: Tree| {
             Tree::new("Assignment", 0, vec![name_id, op, rhs])
@@ -253,10 +254,7 @@ IdentifierStartedStmt: TreeAction<'input> = {
 VarDeclRest: Vec<Tree> = {
     ";" => vec![],
     "," <decls:VarDecls> ";" => decls,
-    "[" "]" <rest:ArrayVarDeclRest> => {
-        // First var declarator gets array brackets
-        rest
-    },
+    "[" "]" <rest:ArrayVarDeclRest> => rest,
 };
 
 ArrayVarDeclRest: Vec<Tree> = {
@@ -265,9 +263,7 @@ ArrayVarDeclRest: Vec<Tree> = {
     "[" "]" <rest:ArrayVarDeclRest> => rest,
 };
 
-// DotTail returns a closure: takes the AccessExpr built so far, returns final stmt Tree.
 DotTail: TreeAction<'input> = {
-    // Chain continues: .identifier DotTail
     "." <l:@L> <field:"identifier"> <tail:DotTail> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |base: Tree| {
@@ -276,7 +272,6 @@ DotTail: TreeAction<'input> = {
             tail.apply(access)
         })
     },
-    // Method call: (args) CallTail
     "(" <args:ArgListOpt> ")" <tail:CallTail> => {
         TreeAction::new(move |base: Tree| {
             let mut kids = vec![base];
@@ -285,7 +280,6 @@ DotTail: TreeAction<'input> = {
             tail.apply(call)
         })
     },
-    // Brace call: {args} CallTail
     "{" <args:ArgListOpt> "}" <tail:CallTail> => {
         TreeAction::new(move |base: Tree| {
             let mut kids = vec![base];
@@ -294,7 +288,6 @@ DotTail: TreeAction<'input> = {
             tail.apply(call)
         })
     },
-    // Assignment to field: AssignOp Expr ;
     <op:AssignOp> <rhs:Expr> ";" => {
         TreeAction::new(move |base: Tree| {
             Tree::new("Assignment", 0, vec![base, op, rhs])
@@ -302,11 +295,8 @@ DotTail: TreeAction<'input> = {
     },
 };
 
-// CallTail: after a method call in statement position.
 CallTail: TreeAction<'input> = {
-    // Statement ends
     ";" => TreeAction::new(|call: Tree| call),
-    // Chain continues: .identifier DotTail
     "." <l:@L> <field:"identifier"> <tail:DotTail> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |call: Tree| {
@@ -385,7 +375,6 @@ ForInit: Option<Tree> = {
 };
 
 ForInitAfterIdent: TreeAction<'input> = {
-    // Type name: IDENTIFIER VarDecls
     <l:@L> <varname:"identifier"> <rest:ForInitVarDeclRest> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |type_id: Tree| {
@@ -404,7 +393,6 @@ ForInitAfterIdent: TreeAction<'input> = {
             Tree::new("LocalVarDecl", 1, kids)
         })
     },
-    // Method call: IDENTIFIER(args)
     "(" <args:ArgListOpt> ")" => {
         TreeAction::new(move |name_id: Tree| {
             let mut kids = vec![name_id];
@@ -419,7 +407,6 @@ ForInitAfterIdent: TreeAction<'input> = {
             Tree::new("MethodCall", 1, kids)
         })
     },
-    // Dotted call/assign in for-init
     "." <l:@L> <field:"identifier"> <tail:ForInitDotTail> => {
         let line = line_from_offset(input, l);
         TreeAction::new(move |base_id: Tree| {
@@ -428,7 +415,6 @@ ForInitAfterIdent: TreeAction<'input> = {
             tail.apply(access)
         })
     },
-    // Assignment: IDENTIFIER AssignOp Expr
     <op:AssignOp> <rhs:Expr> => {
         TreeAction::new(move |name_id: Tree| {
             Tree::new("Assignment", 0, vec![name_id, op, rhs])
@@ -517,12 +503,39 @@ ReturnStmt: Tree = {
     },
 };
 
+// ─── New expressions (ArrayCreation / InstanceCreation) ─
+
+// Shared rule for `new` expressions — used in both AtomExpr and as a statement.
+NewExpr: Tree = {
+    // new int[3]  /  new SomeClass[n]
+    "new" <l:@L> <ty:NewType> "[" <size:Expr> "]" => {
+        Tree::new("ArrayCreation", 0, vec![ty, size])
+    },
+    // new SomeClass(args)
+    "new" <l:@L> <name:"identifier"> "(" <args:ArgListOpt> ")" => {
+        let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
+        let mut kids = vec![n];
+        kids.extend(args);
+        Tree::new("InstanceCreation", 0, kids)
+    },
+};
+
+// The type after `new` — primitive or class name.
+NewType: Tree = {
+    <l:@L> "int"    => Tree::leaf("INT",    "int",    line_from_offset(input, l)),
+    <l:@L> "double" => Tree::leaf("DOUBLE", "double", line_from_offset(input, l)),
+    <l:@L> "bool"   => Tree::leaf("BOOL",   "bool",   line_from_offset(input, l)),
+    <l:@L> "string" => Tree::leaf("STRING", "string", line_from_offset(input, l)),
+    <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
+};
+
 // ─── Expressions ─────────────────────────────────────────
 
 AtomExpr: Tree = {
     Literal => <>,
     <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
     "(" <e:Expr> ")" => e,
+    NewExpr => <>,   // ← ArrayCreation and InstanceCreation
 };
 
 Literal: Tree = {
@@ -535,32 +548,40 @@ Literal: Tree = {
 
 AccessExpr: Tree = {
     AtomExpr => <>,
+    // Simple method call: foo(args)
     <l:@L> <name:"identifier"> "(" <args:ArgListOpt> ")" => {
         let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
         let mut kids = vec![n];
         kids.extend(args);
         Tree::new("MethodCall", 0, kids)
     },
+    // Brace method call: foo{args}
     <l:@L> <name:"identifier"> "{" <args:ArgListOpt> "}" => {
         let n = Tree::leaf("IDENTIFIER", name, line_from_offset(input, l));
         let mut kids = vec![n];
         kids.extend(args);
         Tree::new("MethodCall", 1, kids)
     },
+    // Field access: base.field
     <base:AccessExpr> "." <l:@L> <field:"identifier"> =>
         Tree::new("FieldAccess", 0, vec![base, Tree::leaf("IDENTIFIER", field, line_from_offset(input, l))]),
+    // Dotted method call: base.method(args)
     <base:AccessExpr> "." <l:@L> <method:"identifier"> "(" <args:ArgListOpt> ")" => {
         let m = Tree::leaf("IDENTIFIER", method, line_from_offset(input, l));
         let mut kids = vec![base, m];
         kids.extend(args);
         Tree::new("MethodCall", 2, kids)
     },
+    // Dotted brace call: base.method{args}
     <base:AccessExpr> "." <l:@L> <method:"identifier"> "{" <args:ArgListOpt> "}" => {
         let m = Tree::leaf("IDENTIFIER", method, line_from_offset(input, l));
         let mut kids = vec![base, m];
         kids.extend(args);
         Tree::new("MethodCall", 3, kids)
     },
+    // Array element access: base[index]   ← NEW
+    <base:AccessExpr> "[" <idx:Expr> "]" =>
+        Tree::new("ArrayAccess", 0, vec![base, idx]),
 };
 
 ArgListOpt: Vec<Tree> = {
@@ -643,6 +664,9 @@ Assignment: Tree = <lhs:LeftHandSide> <op:AssignOp> <rhs:Expr> =>
 
 LeftHandSide: Tree = {
     <l:@L> <name:"identifier"> => Tree::leaf("IDENTIFIER", name, line_from_offset(input, l)),
+    // Array element as assignment target: arr[i]   ← NEW
+    <base:AccessExpr> "[" <idx:Expr> "]" =>
+        Tree::new("ArrayAccess", 0, vec![base, idx]),
 };
 
 AssignOp: Tree = {

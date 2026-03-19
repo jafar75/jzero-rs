@@ -1,15 +1,7 @@
-//! Bridge between jzero-lexer (Logos) and LALRPOP's expected iterator format.
-//!
-//! LALRPOP expects an iterator of `Result<(usize, Token, usize), Error>`.
-//! We define a wrapper `Tok` enum that carries `&str` slices for
-//! value-bearing tokens and map from jzero_lexer::Token.
-
 use jzero_lexer::token::Token;
 use logos::SpannedIter;
 use std::fmt;
 
-/// Parser-facing token enum. Wraps jzero_lexer::Token but carries
-/// borrowed string slices for tokens that need their text content.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tok<'input> {
     // Keywords
@@ -21,6 +13,7 @@ pub enum Tok<'input> {
     For,
     If,
     Int,
+    New,        // ← NEW
     Null,
     Public,
     Return,
@@ -82,6 +75,7 @@ impl<'input> fmt::Display for Tok<'input> {
             Tok::For => write!(f, "for"),
             Tok::If => write!(f, "if"),
             Tok::Int => write!(f, "int"),
+            Tok::New => write!(f, "new"),
             Tok::Null => write!(f, "null"),
             Tok::Public => write!(f, "public"),
             Tok::Return => write!(f, "return"),
@@ -124,7 +118,6 @@ impl<'input> fmt::Display for Tok<'input> {
     }
 }
 
-/// Lexical error type for LALRPOP.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LexicalError {
     pub pos: usize,
@@ -137,8 +130,6 @@ impl fmt::Display for LexicalError {
     }
 }
 
-/// LALRPOP-compatible lexer that wraps jzero_lexer's Logos lexer.
-/// Produces `Result<(usize, Tok, usize), LexicalError>` triples.
 pub struct Lexer<'input> {
     input: &'input str,
     inner: SpannedIter<'input, Token>,
@@ -147,17 +138,12 @@ pub struct Lexer<'input> {
 impl<'input> Lexer<'input> {
     pub fn new(input: &'input str) -> Self {
         use logos::Logos;
-        Lexer {
-            input,
-            inner: Token::lexer(input).spanned(),
-        }
+        Lexer { input, inner: Token::lexer(input).spanned() }
     }
 
-    /// Convert a jzero_lexer::Token (bare) into a Tok (with borrowed text).
     fn map_token(&self, tok: Token, start: usize, end: usize) -> Tok<'input> {
         let slice = &self.input[start..end];
         match tok {
-            // Keywords
             Token::Bool => Tok::Bool,
             Token::Break => Tok::Break,
             Token::Class => Tok::Class,
@@ -166,6 +152,7 @@ impl<'input> Lexer<'input> {
             Token::For => Tok::For,
             Token::If => Tok::If,
             Token::Int => Tok::Int,
+            Token::New => Tok::New,       // ← NEW
             Token::Null => Tok::Null,
             Token::Public => Tok::Public,
             Token::Return => Tok::Return,
@@ -173,20 +160,12 @@ impl<'input> Lexer<'input> {
             Token::StringKw => Tok::StringKw,
             Token::Void => Tok::Void,
             Token::While => Tok::While,
-
-            // Boolean literals
             Token::True => Tok::BoolLit(true),
             Token::False => Tok::BoolLit(false),
-
-            // Literals with text
             Token::IntLit => Tok::IntLit(slice),
             Token::DoubleLit => Tok::DoubleLit(slice),
             Token::StringLit => Tok::StringLit(slice),
-
-            // Identifier
             Token::Identifier => Tok::Identifier(slice),
-
-            // Delimiters
             Token::LParen => Tok::LParen,
             Token::RParen => Tok::RParen,
             Token::LBracket => Tok::LBracket,
@@ -196,8 +175,6 @@ impl<'input> Lexer<'input> {
             Token::Semicolon => Tok::Semicolon,
             Token::Comma => Tok::Comma,
             Token::Dot => Tok::Dot,
-
-            // Operators
             Token::Plus => Tok::Plus,
             Token::Minus => Tok::Minus,
             Token::Star => Tok::Star,
@@ -215,9 +192,7 @@ impl<'input> Lexer<'input> {
             Token::LogicalOr => Tok::LogicalOr,
             Token::PlusAssign => Tok::PlusAssign,
             Token::MinusAssign => Tok::MinusAssign,
-
-            // Hidden tokens — should be filtered, but just in case
-            Token::Colon => Tok::Semicolon, // unused in grammar; map to something safe
+            Token::Colon => Tok::Semicolon,
             Token::Newline | Token::LineComment | Token::BlockComment => {
                 unreachable!("hidden tokens should be filtered")
             }
@@ -232,24 +207,15 @@ impl<'input> Iterator for Lexer<'input> {
         loop {
             match self.inner.next() {
                 None => return None,
-                Some((result, span)) => {
-                    match result {
-                        Ok(tok) => {
-                            if tok.is_hidden() {
-                                continue;
-                            }
-                            let mapped = self.map_token(tok, span.start, span.end);
-                            eprintln!("  TOKEN: {:?} @ {}..{}", mapped, span.start, span.end);
-                            return Some(Ok((span.start, mapped, span.end)));
-                        }
-                        Err(err_msg) => {
-                            return Some(Err(LexicalError {
-                                pos: span.start,
-                                msg: err_msg,
-                            }));
-                        }
+                Some((result, span)) => match result {
+                    Ok(tok) => {
+                        if tok.is_hidden() { continue; }
+                        let mapped = self.map_token(tok, span.start, span.end);
+                        eprintln!("  TOKEN: {:?} @ {}..{}", mapped, span.start, span.end);
+                        return Some(Ok((span.start, mapped, span.end)));
                     }
-                }
+                    Err(msg) => return Some(Err(LexicalError { pos: span.start, msg })),
+                },
             }
         }
     }

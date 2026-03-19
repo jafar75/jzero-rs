@@ -19,7 +19,7 @@ The project follows the compilation pipeline, chapter by chapter:
 | Syntax Tree Construction | `jzero-ast`, `jzero-parser` | Ch. 5 | ✅ Done |
 | Symbol Tables | `jzero-symtab`, `jzero-semantic` | Ch. 6 | ✅ Done |
 | Type Checking (base types) | `jzero-semantic` | Ch. 7 | ✅ Done |
-| Type Checking (arrays, methods) | `jzero-semantic` | Ch. 8 | ⬜ Planned |
+| Type Checking (arrays, methods, structs) | `jzero-semantic` | Ch. 8 | ✅ Done |
 | Code Generation | `jzero-codegen` | Ch. 9 | ⬜ Planned |
 | Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
 
@@ -74,11 +74,11 @@ jzero-vm       (planned)
 | Java bytecode | Custom bytecode format (planned) | — |
 | Java VM | Custom Rust VM (planned) | — |
 
-## Semantic Analysis (Chapters 6–7)
+## Semantic Analysis (Chapters 6–8)
 
-Semantic analysis runs in four phases, all implemented in `jzero-semantic`:
+Semantic analysis runs in several passes, all implemented in `jzero-semantic`.
 
-### Phase 1 — Symbol table construction (Ch. 6)
+### Symbol table construction (Ch. 6)
 
 A two-pass tree traversal builds one `SymTab` per scope:
 
@@ -105,7 +105,7 @@ global - 2 symbols
      println
 ```
 
-### Phase 2 — Leaf type assignment (Ch. 7)
+### Leaf type assignment (Ch. 7)
 
 A pre-order pass stamps `typ` on all literal and operator leaf nodes before any expression checking:
 
@@ -118,26 +118,46 @@ A pre-order pass stamps `typ` on all literal and operator leaf nodes before any 
 | `NULL` | `null` |
 | operators (`+`, `-`, `=`, …) | `n/a` |
 
-### Phase 3 — Declaration type assignment (Ch. 7)
+### Declaration type assignment (Ch. 7)
 
 Two cooperative traversals process `FieldDecl`, `LocalVarDecl`, and `FormalParm` nodes:
 
-- **`calc_type`** (post-order) synthesizes a `TypeInfo` from the `Type` child node — resolving keywords (`int`, `void`, …) and identifiers (user-defined class types) into `TypeInfo` values.
-- **`assign_type`** (top-down) inherits the resolved type downward through `VarDeclarator` nodes, wrapping in `TypeInfo::Array(...)` when array brackets are present, and finally storing the type in the corresponding `SymTabEntry`.
+- **`calc_type`** (post-order) synthesizes a `TypeInfo` from the `Type` child node — resolving keywords (`int`, `void`, …) and identifiers (user-defined class types) into `TypeInfo` values. Also handles `MethodHeader` nodes to build full `MethodType` signatures (return type + parameter list) via `mksig`.
+- **`assign_type`** (top-down) inherits the resolved type downward through `VarDeclarator` and `MethodDeclarator` nodes, wrapping in `TypeInfo::Array(...)` when array brackets are present, and finally storing the type in the corresponding `SymTabEntry`.
 
-### Phase 4 — Expression type checking (Ch. 7)
+### Class type construction — `mkcls` pass (Ch. 8)
+
+After symbol tables are fully populated, a dedicated `mkcls` pass walks every `ClassDecl` node and builds a complete `ClassType` for each class:
+
+- Partitions the class's symbol table entries into **fields** and **methods**.
+- Stamps the resulting `ClassType` (including a reference to the class's `SymTab`) onto the class's symbol table entry in the global scope.
+- This makes class types available for `InstanceCreation` lookups and structured type access during expression type checking.
+
+### Expression type checking (Ch. 7–8)
 
 A selective traversal checks types in method bodies using three cooperative functions:
 
-- **`check_type`** — dispatches on node type to compute and verify the type of each expression.
+- **`check_type`** — dispatches on node type to compute and verify the type of each expression node. Handles:
+  - Binary expressions (`AddExpr`, `MulExpr`, `RelExpr`, `EqExpr`, `CondAndExpr`, `CondOrExpr`, `Assignment`)
+  - `ArrayCreation` — type is `Array(element_type)`
+  - `ArrayAccess` — verifies base is an array and index is `int`; sets type to element type
+  - `MethodCall` — looks up method in symbol table, checks argument types via `cksig`, sets type to return type
+  - `ReturnStmt` — looks up the `"return"` dummy symbol in the method's scope, checks expression type against declared return type
+  - `InstanceCreation` — looks up class name in symbol table, sets type to the class's `ClassType`
+  - `FieldAccess` — resolves field name in the object's class symbol table
 - **`check_kids`** — controls which children are visited (e.g. only the body of a `MethodDecl`, not its header).
 - **`check_types`** — enforces operator-specific type compatibility rules and records each result.
+
+The `"return"` dummy symbol trick: rather than threading the return type through every tree node, each method's symbol table has a `"return"` entry inserted during `build_symtabs`. `ReturnStmt` nodes look this up directly — a clean way to connect remote parts of the tree.
 
 Results are collected as `Vec<TypeCheckResult>` with the format:
 
 ```
-line 4: typecheck = on a int and a int -> OK
-line 5: typecheck + on a String and a int -> FAIL
+line 3: typecheck return on a int and a int -> OK
+line 7: typecheck param on a String and a String -> OK
+line 7: typecheck param on a int and a int -> OK
+line 7: typecheck = on a int and a int -> OK
+line 8: typecheck + on a int and a int -> OK
 ```
 
 Both OK and FAIL results are collected — the compiler reports all type errors in one pass.
@@ -151,13 +171,11 @@ pub enum TypeInfo {
     Base(String),       // "int", "double", "boolean", "String", "void", "null", "n/a"
     Array(Box<TypeInfo>),
     Method(MethodType), // return_type + Vec<Parameter>
-    Class(ClassType),   // name + optional SymTab reference
+    Class(ClassType),   // name + optional SymTab reference + fields + methods
 }
 ```
 
 ### Semantic attributes on Tree nodes
-
-Two semantic attributes were added to `Tree` in Chapter 6–7:
 
 | Field | Kind | Description |
 |---|---|---|
@@ -217,26 +235,24 @@ ClassDecl#0 (2 kids)
 
 ### Differences from the book's tree
 
-The tree is structurally equivalent to the book's output with a few minor differences due to grammar adaptations:
-
-- **`FieldAccess` instead of `QualifiedName`** — dotted names like `System.out` are represented as nested `FieldAccess` nodes rather than `QualifiedName` chains, since we removed `QualifiedName` from the grammar in Chapter 4.
+- **`FieldAccess` instead of `QualifiedName`** — dotted names like `System.out` are represented as nested `FieldAccess` nodes rather than `QualifiedName` chains.
 - **`ClassBody` is flattened** — the book has an explicit `ClassBody#0` node; ours folds its children directly into `ClassDecl`.
-- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly record array brackets, whereas the book uses a single node.
+- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly record array brackets.
 
 ## Parser Design Notes
 
 The book's BYACC/J grammar relies on LALR(1) with implicit shift-over-reduce conflict resolution. Adapting it to Rust required some significant changes:
 
-**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities (the `IDENTIFIER` at the start of a statement can begin either a type for variable declaration or an expression for method calls/assignments). grmtools' LALR parser resolved these conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
+**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities. grmtools resolved conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
 
-**Key adaptations from the book grammar:**
+**Key adaptations:**
 
-- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision until enough tokens disambiguate (e.g., a second `IDENTIFIER` means variable declaration, `"."` means field access/method call, `"("` means method call).
-- **Merged `FieldAccess`/`MethodCall` into `AccessExpr`** — a left-recursive rule that builds chains of `.field` and `.method(args)` accesses, avoiding the mutual recursion between `Primary`, `FieldAccess`, and `MethodCall` that caused conflicts.
-- **Removed `QualifiedName` from `Type`** — dotted names like `System.out` are handled purely as expression-level field accesses rather than as qualified type names, since Jzero doesn't need fully-qualified types.
-- **Removed standalone `InstantiationExpr`** — its production (`Name "(" ArgListOpt ")"`) was identical to one of `MethodCall`'s alternatives, creating a reduce/reduce conflict.
+- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision until enough tokens disambiguate.
+- **Merged `FieldAccess`/`MethodCall` into `AccessExpr`** — a left-recursive rule that builds chains of `.field` and `.method(args)` accesses.
+- **`new` keyword support (Ch. 8)** — `ArrayCreation` (`new int[n]`) and `InstanceCreation` (`new Foo()`) are parsed as `NewExpr` and slot into `AtomExpr`.
+- **`ArrayAccess` in both rvalue and lvalue position** — array subscript expressions appear in `AccessExpr` (rvalue) and `LeftHandSide` (lvalue).
 
-The Logos lexer (`jzero-lexer`) feeds tokens into the LALRPOP parser through a thin adapter layer (`jzero-parser/src/lexer.rs`) that wraps bare `Token` variants with borrowed string slices for value-bearing tokens (identifiers, literals).
+The Logos lexer feeds tokens into the LALRPOP parser through a thin adapter layer (`jzero-parser/src/lexer.rs`).
 
 ## Building & Testing
 
@@ -259,8 +275,6 @@ cargo run --bin j0 -- tests/hello.java --png
 ```
 
 ## Example
-
-A simple Jzero program:
 
 ```java
 public class hello {

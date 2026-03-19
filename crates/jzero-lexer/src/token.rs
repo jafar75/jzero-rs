@@ -18,13 +18,11 @@ fn block_comment_callback(lex: &mut logos::Lexer<Token>) {
 #[logos(skip r"[ \t\r\f]+")]
 #[logos(error = String)]
 pub enum Token {
-    // ── Comments & newlines (tracked for line counting, not emitted) ──
+    // ── Comments & newlines ───────────────────────────────────
     #[regex(r"\n", newline_callback)]
     Newline,
-
     #[regex(r"//[^\n]*\n?", newline_callback, allow_greedy = true)]
     LineComment,
-
     #[regex(r"/\*([^*]|\*+[^*/])*\*+/", block_comment_callback)]
     BlockComment,
 
@@ -45,6 +43,8 @@ pub enum Token {
     If,
     #[token("int")]
     Int,
+    #[token("new")]          // ← NEW
+    New,
     #[token("null")]
     Null,
     #[token("public")]
@@ -130,10 +130,8 @@ pub enum Token {
     #[regex(r"[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?|[0-9]*\.[0-9]+([eE][+-]?[0-9]+)?", priority = 3)]
     #[regex(r"[0-9]+[eE][+-]?[0-9]+", priority = 3)]
     DoubleLit,
-
     #[regex(r"[0-9]+", priority = 2)]
     IntLit,
-
     #[regex(r#""[^"]*""#)]
     StringLit,
 
@@ -143,8 +141,6 @@ pub enum Token {
 }
 
 impl Token {
-    /// Returns true for tokens that are only used for line tracking
-    /// and should not be emitted to the parser.
     pub fn is_hidden(&self) -> bool {
         matches!(self, Token::Newline | Token::LineComment | Token::BlockComment)
     }
