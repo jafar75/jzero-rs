@@ -1,0 +1,10 @@
+[package]
+name = "jzero-codegen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jzero-ast     = { path = "../jzero-ast" }
+jzero-parser = { path = "../jzero-parser" }
+jzero-symtab  = { path = "../jzero-symtab" }
+jzero-semantic = { path = "../jzero-semantic" }

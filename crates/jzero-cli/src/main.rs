@@ -9,17 +9,19 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: j0 <source.java> [--png]");
+        eprintln!("Usage: j0 <source.java> [--png] [--codegen]");
         eprintln!();
         eprintln!("Parses a Jzero source file and outputs the syntax tree.");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --png    Also render the DOT file to PNG using Graphviz");
+        eprintln!("  --png      Also render the DOT file to PNG using Graphviz");
+        eprintln!("  --codegen  Run semantic analysis + code generation, print IR");
         process::exit(1);
     }
 
     let source_path = &args[1];
-    let render_png = args.iter().any(|a| a == "--png");
+    let render_png  = args.iter().any(|a| a == "--png");
+    let do_codegen  = args.iter().any(|a| a == "--codegen");
 
     // Read source file
     let source = match fs::read_to_string(source_path) {
@@ -34,13 +36,37 @@ fn main() {
     reset_ids();
 
     // Parse and build syntax tree
-    let tree = match parse_tree(&source) {
+    let mut tree = match parse_tree(&source) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("{}: {}", source_path, e);
             process::exit(1);
         }
     };
+
+    // ── Codegen path ──────────────────────────────────────────────────────────
+    if do_codegen {
+        let sem = jzero_semantic::analyze(&mut tree);
+
+        // Print any semantic errors
+        for err in &sem.errors {
+            eprintln!("{}", err);
+        }
+
+        // Generate intermediate code
+        let ctx = jzero_codegen::generate(&tree, &sem);
+
+        // Emit and print the assembler-style output
+        let asm = jzero_codegen::emit::emit(&tree, &ctx);
+        print!("{}", asm);
+
+        if sem.errors.is_empty() {
+            println!("no errors");
+        }
+        return;
+    }
+
+    // ── Default path: tree + DOT ──────────────────────────────────────────────
 
     // Print tree to stdout (like the book's j0)
     print!("{}", tree);

@@ -211,7 +211,6 @@ impl<'input> Iterator for Lexer<'input> {
                     Ok(tok) => {
                         if tok.is_hidden() { continue; }
                         let mapped = self.map_token(tok, span.start, span.end);
-                        eprintln!("  TOKEN: {:?} @ {}..{}", mapped, span.start, span.end);
                         return Some(Ok((span.start, mapped, span.end)));
                     }
                     Err(msg) => return Some(Err(LexicalError { pos: span.start, msg })),

@@ -10,3 +10,5 @@ path = "src/main.rs"
 [dependencies]
 jzero-parser = { path = "../jzero-parser" }
 jzero-ast = { path = "../jzero-ast" }
+jzero-semantic = { path = "../jzero-semantic" }
+jzero-codegen  = { path = "../jzero-codegen" }

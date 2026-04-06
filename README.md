@@ -1,16 +1,14 @@
 # jzero-rs
 
-A compiler and bytecode interpreter for **Jzero** — a small subset of Java — written entirely in Rust.
+A compiler for **Jzero** — a small subset of Java — written entirely in Rust.
 
-This project follows the book *Build Your Own Programming Language (Edition 2)* by Clinton L. Jeffery, but replaces the original Java/Unicon tooling with Rust equivalents.
+This project follows the book *Build Your Own Programming Language (Edition 2)* by Clinton L. Jeffery, replacing the original Java/Unicon tooling with idiomatic Rust equivalents.
 
 ## What is Jzero?
 
 Jzero is a strict subset of Java designed for teaching compiler construction. Every valid Jzero program is also a valid Java program. It supports a minimal but complete set of features: classes, methods, control flow, basic types (`int`, `double`, `bool`, `string`), arrays, and simple I/O.
 
 ## Roadmap
-
-The project follows the compilation pipeline, chapter by chapter:
 
 | Phase | Crate | Book Chapter | Status |
 |---|---|---|---|
@@ -20,239 +18,44 @@ The project follows the compilation pipeline, chapter by chapter:
 | Symbol Tables | `jzero-symtab`, `jzero-semantic` | Ch. 6 | ✅ Done |
 | Type Checking (base types) | `jzero-semantic` | Ch. 7 | ✅ Done |
 | Type Checking (arrays, methods, structs) | `jzero-semantic` | Ch. 8 | ✅ Done |
-| Code Generation | `jzero-codegen` | Ch. 9 | ⬜ Planned |
+| Intermediate Code Generation | `jzero-codegen` | Ch. 9 | ✅ Done |
 | Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
 
 ## Architecture
 
-The project is organized as a Cargo workspace with separate crates for each compiler phase:
-
 ```
 jzero-rs/
-├── Cargo.toml              # Workspace root
+├── Cargo.toml
 ├── crates/
 │   ├── jzero-lexer/        # Lexical analysis (Logos)
 │   ├── jzero-parser/       # Parsing & syntax tree construction (LALRPOP)
 │   ├── jzero-ast/          # Syntax tree data structures & DOT output
 │   ├── jzero-symtab/       # Symbol table types (SymTab, SymTabEntry, TypeInfo)
-│   ├── jzero-cli/          # CLI tool (j0) for parsing and tree visualization
 │   ├── jzero-semantic/     # Symbol table construction & type checking
-│   ├── jzero-codegen/      # Bytecode generation (planned)
+│   ├── jzero-codegen/      # Intermediate code generation
+│   ├── jzero-cli/          # CLI tool (j0)
 │   └── jzero-vm/           # Bytecode interpreter (planned)
 └── tests/
-    └── samples/            # Jzero source files for testing
+    ├── hello.java           # Minimal hello-world test
+    └── hello_loop.java      # Loop + array access golden test (Ch. 9)
 ```
 
-Each crate enforces a clean one-way dependency chain:
+Clean one-way dependency chain:
 
 ```
-jzero-lexer
-     ↓
-jzero-symtab   (no external deps — TypeInfo, SymTab, SymTabEntry)
-     ↓
-jzero-ast      (Tree + semantic attributes: stab, typ, is_const)
-     ↓
-jzero-parser   (LALRPOP grammar → Tree)
-     ↓
-jzero-semantic (symbol table construction + type checking)
-     ↓
-jzero-codegen  (planned)
-     ↓
-jzero-vm       (planned)
+jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic → jzero-codegen
 ```
 
 ## Tool Mapping
 
 | Original (Book) | Rust Equivalent | Notes |
 |---|---|---|
-| JFlex (lexer generator) | [Logos](https://github.com/maciejhirsz/logos) | Derive-macro based, zero-copy |
-| BYACC/J (parser generator) | [LALRPOP](https://github.com/lalrpop/lalrpop) | LR(1) with lane table algorithm |
-| `tree.java` / `tree.icn` | `jzero-ast` crate | Uniform `Tree` struct with DOT output |
-| `symtab.java` / `symtab_entry.java` | `jzero-symtab` crate | Rust enum-based type hierarchy |
+| JFlex | [Logos](https://github.com/maciejhirsz/logos) | Derive-macro based, zero-copy |
+| BYACC/J | [LALRPOP](https://github.com/lalrpop/lalrpop) | LR(1) with lane table algorithm |
+| `tree.java` | `jzero-ast` crate | Uniform `Tree` struct with DOT output |
+| `symtab.java` | `jzero-symtab` crate | Rust enum-based type hierarchy |
 | `typeinfo.java` + subclasses | `TypeInfo` enum | `Base`, `Array`, `Method`, `Class` variants |
-| Graphviz DOT visualization | Graphviz (same) | CLI tool generates `.dot` files |
-| Java bytecode | Custom bytecode format (planned) | — |
-| Java VM | Custom Rust VM (planned) | — |
-
-## Semantic Analysis (Chapters 6–8)
-
-Semantic analysis runs in several passes, all implemented in `jzero-semantic`.
-
-### Symbol table construction (Ch. 6)
-
-A two-pass tree traversal builds one `SymTab` per scope:
-
-- **First pass** over each class body registers all field and method signatures upfront, allowing forward references within a class.
-- **Second pass** walks method bodies to insert parameters and local variables.
-- The predefined `System.out.println` hierarchy is inserted into the global scope before the user's code is walked.
-- Each `Tree` node gets its `stab` field set to the nearest enclosing scope's symbol table (an inherited attribute, propagated top-down).
-
-Errors detected: **redeclared variables**.
-
-Example symbol table output for `hello.java`:
-
-```
-global - 2 symbols
- hello
-  class - 2 symbols
-   main
-    method - 0 symbols
-   System
- System
-  class - 1 symbols
-   out
-    class - 1 symbols
-     println
-```
-
-### Leaf type assignment (Ch. 7)
-
-A pre-order pass stamps `typ` on all literal and operator leaf nodes before any expression checking:
-
-| Token | Type |
-|---|---|
-| `INTLIT` | `int` |
-| `DOUBLELIT` | `double` |
-| `STRINGLIT` | `String` |
-| `BOOLLIT` | `boolean` |
-| `NULL` | `null` |
-| operators (`+`, `-`, `=`, …) | `n/a` |
-
-### Declaration type assignment (Ch. 7)
-
-Two cooperative traversals process `FieldDecl`, `LocalVarDecl`, and `FormalParm` nodes:
-
-- **`calc_type`** (post-order) synthesizes a `TypeInfo` from the `Type` child node — resolving keywords (`int`, `void`, …) and identifiers (user-defined class types) into `TypeInfo` values. Also handles `MethodHeader` nodes to build full `MethodType` signatures (return type + parameter list) via `mksig`.
-- **`assign_type`** (top-down) inherits the resolved type downward through `VarDeclarator` and `MethodDeclarator` nodes, wrapping in `TypeInfo::Array(...)` when array brackets are present, and finally storing the type in the corresponding `SymTabEntry`.
-
-### Class type construction — `mkcls` pass (Ch. 8)
-
-After symbol tables are fully populated, a dedicated `mkcls` pass walks every `ClassDecl` node and builds a complete `ClassType` for each class:
-
-- Partitions the class's symbol table entries into **fields** and **methods**.
-- Stamps the resulting `ClassType` (including a reference to the class's `SymTab`) onto the class's symbol table entry in the global scope.
-- This makes class types available for `InstanceCreation` lookups and structured type access during expression type checking.
-
-### Expression type checking (Ch. 7–8)
-
-A selective traversal checks types in method bodies using three cooperative functions:
-
-- **`check_type`** — dispatches on node type to compute and verify the type of each expression node. Handles:
-  - Binary expressions (`AddExpr`, `MulExpr`, `RelExpr`, `EqExpr`, `CondAndExpr`, `CondOrExpr`, `Assignment`)
-  - `ArrayCreation` — type is `Array(element_type)`
-  - `ArrayAccess` — verifies base is an array and index is `int`; sets type to element type
-  - `MethodCall` — looks up method in symbol table, checks argument types via `cksig`, sets type to return type
-  - `ReturnStmt` — looks up the `"return"` dummy symbol in the method's scope, checks expression type against declared return type
-  - `InstanceCreation` — looks up class name in symbol table, sets type to the class's `ClassType`
-  - `FieldAccess` — resolves field name in the object's class symbol table
-- **`check_kids`** — controls which children are visited (e.g. only the body of a `MethodDecl`, not its header).
-- **`check_types`** — enforces operator-specific type compatibility rules and records each result.
-
-The `"return"` dummy symbol trick: rather than threading the return type through every tree node, each method's symbol table has a `"return"` entry inserted during `build_symtabs`. `ReturnStmt` nodes look this up directly — a clean way to connect remote parts of the tree.
-
-Results are collected as `Vec<TypeCheckResult>` with the format:
-
-```
-line 3: typecheck return on a int and a int -> OK
-line 7: typecheck param on a String and a String -> OK
-line 7: typecheck param on a int and a int -> OK
-line 7: typecheck = on a int and a int -> OK
-line 8: typecheck + on a int and a int -> OK
-```
-
-Both OK and FAIL results are collected — the compiler reports all type errors in one pass.
-
-### TypeInfo hierarchy
-
-The book's `typeinfo` class hierarchy is represented as a single Rust enum in `jzero-symtab`:
-
-```rust
-pub enum TypeInfo {
-    Base(String),       // "int", "double", "boolean", "String", "void", "null", "n/a"
-    Array(Box<TypeInfo>),
-    Method(MethodType), // return_type + Vec<Parameter>
-    Class(ClassType),   // name + optional SymTab reference + fields + methods
-}
-```
-
-### Semantic attributes on Tree nodes
-
-| Field | Kind | Description |
-|---|---|---|
-| `stab: Option<Rc<RefCell<SymTab>>>` | Inherited | Nearest enclosing scope's symbol table |
-| `is_const: Option<bool>` | Synthesized | Whether this subtree is a compile-time constant |
-| `typ: Option<TypeInfo>` | Synthesized | The type of the value this node computes |
-
-All fields default to `None` — the parser remains unaware of semantic concerns.
-
-## Syntax Tree (Chapter 5)
-
-The parser builds a **syntax tree** (not a full parse tree) during parsing. Internal nodes are only created when a grammar rule has two or more children — single-child productions pass through without creating a node, keeping the tree compact.
-
-The tree uses a uniform node structure (`jzero_ast::tree::Tree`):
-
-- **Leaf nodes** hold token information (category, source text, line number)
-- **Internal nodes** hold a production rule name, rule alternative number, and child nodes
-
-Left-factored grammar rules (like `IdentifierStartedStmt` and `DotTail`) use deferred closures (`TreeAction`) to reconstruct logical tree nodes such as `MethodCall`, `FieldAccess`, and `Assignment`, hiding the left-factoring from the tree structure.
-
-### Tree visualization
-
-The CLI tool `j0` parses a Jzero source file and produces both text output and a Graphviz DOT file:
-
-```bash
-# Parse and print tree + write DOT file
-cargo run --bin j0 -- tests/hello.java
-
-# Also render to PNG (requires Graphviz)
-cargo run --bin j0 -- tests/hello.java --png
-```
-
-Example output for `hello.java`:
-
-```
-ClassDecl#0 (2 kids)
-  [IDENTIFIER] hello (line 1)
-  MethodDecl#0 (2 kids)
-    MethodHeader#0 (2 kids)
-      [VOID] void (line 2)
-      MethodDeclarator#0 (2 kids)
-        [IDENTIFIER] main (line 2)
-        FormalParm#0 (2 kids)
-          [IDENTIFIER] String (line 2)
-          VarDeclarator#1 (1 kids)
-            VarDeclarator#0 (1 kids)
-              [IDENTIFIER] argv (line 2)
-    Block#0 (1 kids)
-      MethodCall#0 (2 kids)
-        FieldAccess#0 (2 kids)
-          FieldAccess#0 (2 kids)
-            [IDENTIFIER] System (line 3)
-            [IDENTIFIER] out (line 3)
-          [IDENTIFIER] println (line 3)
-        [STRINGLIT] "hello, jzero!" (line 3)
-```
-
-### Differences from the book's tree
-
-- **`FieldAccess` instead of `QualifiedName`** — dotted names like `System.out` are represented as nested `FieldAccess` nodes rather than `QualifiedName` chains.
-- **`ClassBody` is flattened** — the book has an explicit `ClassBody#0` node; ours folds its children directly into `ClassDecl`.
-- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly record array brackets.
-
-## Parser Design Notes
-
-The book's BYACC/J grammar relies on LALR(1) with implicit shift-over-reduce conflict resolution. Adapting it to Rust required some significant changes:
-
-**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities. grmtools resolved conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
-
-**Key adaptations:**
-
-- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision until enough tokens disambiguate.
-- **Merged `FieldAccess`/`MethodCall` into `AccessExpr`** — a left-recursive rule that builds chains of `.field` and `.method(args)` accesses.
-- **`new` keyword support (Ch. 8)** — `ArrayCreation` (`new int[n]`) and `InstanceCreation` (`new Foo()`) are parsed as `NewExpr` and slot into `AtomExpr`.
-- **`ArrayAccess` in both rvalue and lvalue position** — array subscript expressions appear in `AccessExpr` (rvalue) and `LeftHandSide` (lvalue).
-
-The Logos lexer feeds tokens into the LALRPOP parser through a thin adapter layer (`jzero-parser/src/lexer.rs`).
+| `address.java` + `tac.java` | `jzero-codegen` crate | `Address` enum + `Tac` struct |
 
 ## Building & Testing
 
@@ -263,26 +66,170 @@ cargo build
 # Run all tests
 cargo test
 
-# Test a specific crate
-cargo test -p jzero-lexer
-cargo test -p jzero-parser
-cargo test -p jzero-ast
-cargo test -p jzero-symtab
+# Run tests for a specific crate
 cargo test -p jzero-semantic
+cargo test -p jzero-codegen
 
-# Parse a Jzero source file and visualize the syntax tree
+# Parse a file and visualize the syntax tree
 cargo run --bin j0 -- tests/hello.java --png
+
+# Run full compiler pipeline and print intermediate code
+cargo run --bin j0 -- tests/hello_loop.java --codegen
 ```
 
-## Example
+## Example Output
 
 ```java
-public class hello {
-    public static void main(String argv[]) {
-        System.out.println("hello, jzero!");
-    }
+// tests/hello_loop.java
+public class hello_loop {
+   public static void main(String argv[]) {
+      int x;
+      x = argv.length;
+      x = x + 2;
+      while (x > 3) {
+         System.out.println("hello, jzero!");
+         x = x - 1;
+      }
+   }
 }
 ```
+
+Running `j0 tests/hello_loop.java --codegen` produces:
+
+```
+.string
+L5:
+string "hello, jzero!"
+.global
+global global:0,System
+global global:8,hello_loop
+.code
+proc main,0,1
+ASIZE loc:24,loc:8
+ASN loc:16,loc:24
+ADD loc:32,loc:16,imm:2
+ASN loc:16,loc:32
+L2:
+BGT L3,loc:16,imm:3
+GOTO L6
+L3:
+PARM strings:0
+PARM global:0
+CALL PrintStream__println,imm:1
+SUB loc:48,loc:16,imm:1
+ASN loc:16,loc:48
+GOTO L2
+L6:
+RET
+end
+no errors
+```
+
+## Semantic Analysis (Chapters 6–8)
+
+### Symbol table construction (Ch. 6)
+
+A two-pass tree traversal builds one `SymTab` per scope:
+
+- **First pass** registers all field and method signatures, enabling forward references within a class.
+- **Second pass** walks method bodies to insert parameters and local variables.
+- `System.out.println` is pre-registered in the global scope.
+- Each `Tree` node gets its `stab` field set to the nearest enclosing scope (inherited, top-down).
+
+Errors detected: redeclared variables.
+
+### Type checking (Ch. 7–8)
+
+Three cooperative functions — `check_type`, `check_kids`, `check_types` — perform a selective post-order traversal of method bodies.
+
+Key design decisions:
+- **`TypeInfo` enum** replaces the book's `typeinfo` class hierarchy — `Base`, `Array`, `Method`, `Class` variants with exhaustive matching.
+- **`"return"` dummy symbol** — each method's stab gets a `"return"` entry with the declared return type. `ReturnStmt` nodes look it up directly, avoiding threading return type through the tree.
+- **`mkcls` pass** — after symbol tables are fully built, a dedicated pass constructs a complete `ClassType` for each class (partitioning fields from methods), making instance creation type-checking possible.
+- **Two-pass class walking** — the first pass registers all members before any method bodies are walked, enabling forward references.
+
+Results are collected as `Vec<TypeCheckResult>`:
+```
+line 4: typecheck = on a int and a int -> OK
+line 5: typecheck + on a int and a int -> OK
+```
+
+## Intermediate Code Generation (Chapter 9)
+
+The `jzero-codegen` crate implements three-address code (TAC) generation via five passes over the typed syntax tree:
+
+### Data structures
+
+**`Address`** — a memory location in the generated program:
+```rust
+pub enum Address {
+    Regional { region: Region, offset: i64 },  // loc:8, global:0, imm:42, strings:0, L3
+    Symbol(String),                             // PrintStream__println
+}
+```
+
+Regions: `Loc` (stack), `Global` (static), `Strings` (read-only string pool), `Lab` (code label), `Class` (heap-relative), `Imm` (immediate value), `Self_` (implicit this pointer).
+
+**`Tac`** — a single three-address instruction:
+```rust
+pub struct Tac { pub op: Op, pub op1: Option<Address>, pub op2: Option<Address>, pub op3: Option<Address> }
+```
+
+Opcodes: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ASN`, `ASIZE`, `LOAD`, `STORE`, `NEWARRAY`, `GOTO`, `LAB`, `BLT`, `BLE`, `BGT`, `BGE`, `BEQ`, `BNE`, `PARM`, `CALL`, `RET`.
+
+**`CodegenContext`** — owns all codegen state that lives outside the AST:
+- Label counter (`genlabel()` mints fresh `Address::lab(id)`)
+- Per-method local offset counter (`genlocal()` allocates 8-byte slots starting at `loc:8`)
+- `node_info: HashMap<u32, NodeInfo>` — parallel structure keyed by `Tree::id` storing `icode`, `addr`, `first`, `follow`, `on_true`, `on_false`
+- `var_addrs: HashMap<String, Address>` — variable layout map keyed by `(scope_ptr, name)`
+- String pool and global variable list
+
+### Pipeline
+
+```
+analyze(tree) → SemanticResult
+      ↓
+assign_addresses()   Pass 1: walk symtab tree, assign Address to every variable/param
+      ↓
+genfirst(tree)       Pass 2: post-order, synthesize `first` entry-point labels
+      ↓
+genfollow(tree)      Pass 3: pre-order, inherit `follow` exit-point labels
+      ↓
+gentargets(tree)     Pass 4: pre-order, inherit `on_true`/`on_false` for Boolean exprs
+      ↓
+gencode(tree)        Pass 5: post-order, emit Vec<Tac> for each node
+      ↓
+emit(tree, ctx)      Render assembler-style text output
+```
+
+### Variable layout
+
+Local offsets are assigned per-method starting at `loc:8` (reserving `loc:0` for the implicit self pointer), allocating 8 bytes per slot in declaration order:
+
+| Symbol | Kind | Address |
+|--------|------|---------|
+| `argv` | Param | `loc:8` |
+| `x` | Local | `loc:16` |
+| temporaries | Compiler-generated | `loc:24`, `loc:32`, … |
+
+### Key design decisions
+
+- **AST stays clean** — codegen state lives entirely in `CodegenContext::node_info`, keyed by `Tree::id`. No new fields added to `Tree`.
+- **`addr_of` returns `Address` (not `Option`)** — falls back to `imm:0` for non-value nodes (operator leaves), eliminating unwrap noise at call sites.
+- **`while` guarantees an exit label** — if a `WhileStmt` is the last statement in a method (no natural follow), `gen_while` mints a fresh label rather than leaving `on_false` as `None`.
+- **`reemit_condition`** — because `gen_rel_expr` runs before `gen_while` has set `on_false`, the while handler re-emits the condition's branch instructions after setting `on_false`.
+- **Method name mangling** — dotted calls like `System.out.println(...)` appear in the tree as `MethodCall#0` with a `FieldAccess` chain as `kids[0]`. The codegen detects this, skips the chain recursion (which would emit spurious LOADs), walks only the args, and emits `CALL PrintStream__println` via `mangle_method`.
+- **String pool** — string literals are interned with a `Lab`-region label (printed as `L0:`) and referenced in instructions via a `Strings`-region address (`strings:0`).
+
+## Parser Design Notes
+
+**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities. grmtools resolved conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
+
+**Key adaptations:**
+- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision using `TreeAction` closures.
+- **`FieldAccess` instead of `QualifiedName`** — dotted names are represented as nested `FieldAccess` nodes, built left-recursively in `AccessExpr`.
+- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly encode array brackets.
+- **`DoubleLit` regex fix** — the original regex matched a bare `.` as a double literal, breaking all method-call parsing. Fixed to require at least one digit on either side of the decimal point.
 
 ## References
 
