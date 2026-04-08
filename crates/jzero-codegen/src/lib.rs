@@ -12,11 +12,15 @@
 //! 5. **gencode**    — emit `Vec<Tac>` for each node (post-order).
 
 pub mod address;
+pub mod byc;
+pub mod bytecode;
+pub mod j0file;
 pub mod context;
 pub mod emit;
 pub mod gencode;
 pub mod labels;
 pub mod layout;
+pub mod pipeline;
 pub mod tac;
 mod tests;
 

@@ -1,6 +1,6 @@
 # jzero-rs
 
-A compiler for **Jzero** — a small subset of Java — written entirely in Rust.
+A compiler + bytecode VM for **Jzero** — a small subset of Java — written entirely in Rust.
 
 This project follows the book *Build Your Own Programming Language (Edition 2)* by Clinton L. Jeffery, replacing the original Java/Unicon tooling with idiomatic Rust equivalents.
 
@@ -19,7 +19,11 @@ Jzero is a strict subset of Java designed for teaching compiler construction. Ev
 | Type Checking (base types) | `jzero-semantic` | Ch. 7 | ✅ Done |
 | Type Checking (arrays, methods, structs) | `jzero-semantic` | Ch. 8 | ✅ Done |
 | Intermediate Code Generation | `jzero-codegen` | Ch. 9 | ✅ Done |
-| Bytecode Interpreter | `jzero-vm` | Ch. 10 | ⬜ Planned |
+| Bytecode Generation | `jzero-codegen` | Ch. 13 | ✅ Done |
+| Bytecode Interpreter / VM | `jzero-vm` | Ch. 12 | ✅ Done |
+
+Chapters 10 (IDE/syntax coloring) and 11 (transpiler) were intentionally skipped as they
+are detours unrelated to the core compiler pipeline.
 
 ## Architecture
 
@@ -32,18 +36,18 @@ jzero-rs/
 │   ├── jzero-ast/          # Syntax tree data structures & DOT output
 │   ├── jzero-symtab/       # Symbol table types (SymTab, SymTabEntry, TypeInfo)
 │   ├── jzero-semantic/     # Symbol table construction & type checking
-│   ├── jzero-codegen/      # Intermediate code generation
-│   ├── jzero-cli/          # CLI tool (j0)
-│   └── jzero-vm/           # Bytecode interpreter (planned)
+│   ├── jzero-codegen/      # TAC + bytecode generation
+│   ├── jzero-vm/           # Bytecode interpreter
+│   └── jzero-cli/          # CLI tool (j0)
 └── tests/
     ├── hello.java           # Minimal hello-world test
-    └── hello_loop.java      # Loop + array access golden test (Ch. 9)
+    └── hello_loop.java      # End-to-end golden test (loop + array + I/O)
 ```
 
 Clean one-way dependency chain:
 
 ```
-jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic → jzero-codegen
+jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic → jzero-codegen → jzero-vm
 ```
 
 ## Tool Mapping
@@ -56,6 +60,7 @@ jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic �
 | `symtab.java` | `jzero-symtab` crate | Rust enum-based type hierarchy |
 | `typeinfo.java` + subclasses | `TypeInfo` enum | `Base`, `Array`, `Method`, `Class` variants |
 | `address.java` + `tac.java` | `jzero-codegen` crate | `Address` enum + `Tac` struct |
+| `byc.java` + `j0machine.java` | `jzero-codegen` + `jzero-vm` | Bytecode format + stack-machine VM |
 
 ## Building & Testing
 
@@ -63,21 +68,23 @@ jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic �
 # Build everything
 cargo build
 
-# Run all tests
-cargo test
-
-# Run tests for a specific crate
-cargo test -p jzero-semantic
-cargo test -p jzero-codegen
+# Run all tests (single-threaded to avoid global ID counter races)
+cargo test --workspace -- --test-threads=1
 
 # Parse a file and visualize the syntax tree
 cargo run --bin j0 -- tests/hello.java --png
 
-# Run full compiler pipeline and print intermediate code
+# Print TAC intermediate code (Chapter 9)
 cargo run --bin j0 -- tests/hello_loop.java --codegen
+
+# Compile to bytecode and print assembler listing (Chapter 13)
+cargo run --bin j0 -- tests/hello_loop.java --bytecode
+
+# Compile and execute in the VM (Chapters 12+13)
+cargo run --bin j0 -- tests/hello_loop.java --run a b c d e
 ```
 
-## Example Output
+## End-to-End Example
 
 ```java
 // tests/hello_loop.java
@@ -94,7 +101,7 @@ public class hello_loop {
 }
 ```
 
-Running `j0 tests/hello_loop.java --codegen` produces:
+Running `j0 tests/hello_loop.java --codegen` produces TAC intermediate code:
 
 ```
 .string
@@ -125,6 +132,16 @@ end
 no errors
 ```
 
+Running `j0 tests/hello_loop.java --run a b c d e` executes the program end-to-end:
+
+```
+hello, jzero!
+hello, jzero!
+hello, jzero!
+hello, jzero!
+no errors
+```
+
 ## Semantic Analysis (Chapters 6–8)
 
 ### Symbol table construction (Ch. 6)
@@ -136,100 +153,74 @@ A two-pass tree traversal builds one `SymTab` per scope:
 - `System.out.println` is pre-registered in the global scope.
 - Each `Tree` node gets its `stab` field set to the nearest enclosing scope (inherited, top-down).
 
-Errors detected: redeclared variables.
-
 ### Type checking (Ch. 7–8)
 
 Three cooperative functions — `check_type`, `check_kids`, `check_types` — perform a selective post-order traversal of method bodies.
 
 Key design decisions:
 - **`TypeInfo` enum** replaces the book's `typeinfo` class hierarchy — `Base`, `Array`, `Method`, `Class` variants with exhaustive matching.
-- **`"return"` dummy symbol** — each method's stab gets a `"return"` entry with the declared return type. `ReturnStmt` nodes look it up directly, avoiding threading return type through the tree.
-- **`mkcls` pass** — after symbol tables are fully built, a dedicated pass constructs a complete `ClassType` for each class (partitioning fields from methods), making instance creation type-checking possible.
-- **Two-pass class walking** — the first pass registers all members before any method bodies are walked, enabling forward references.
-
-Results are collected as `Vec<TypeCheckResult>`:
-```
-line 4: typecheck = on a int and a int -> OK
-line 5: typecheck + on a int and a int -> OK
-```
+- **`"return"` dummy symbol** — each method's stab gets a `"return"` entry with the declared return type. `ReturnStmt` nodes look it up directly.
+- **`mkcls` pass** — after symbol tables are fully built, a dedicated pass constructs a complete `ClassType` for each class.
 
 ## Intermediate Code Generation (Chapter 9)
 
-The `jzero-codegen` crate implements three-address code (TAC) generation via five passes over the typed syntax tree:
-
-### Data structures
-
-**`Address`** — a memory location in the generated program:
-```rust
-pub enum Address {
-    Regional { region: Region, offset: i64 },  // loc:8, global:0, imm:42, strings:0, L3
-    Symbol(String),                             // PrintStream__println
-}
-```
-
-Regions: `Loc` (stack), `Global` (static), `Strings` (read-only string pool), `Lab` (code label), `Class` (heap-relative), `Imm` (immediate value), `Self_` (implicit this pointer).
-
-**`Tac`** — a single three-address instruction:
-```rust
-pub struct Tac { pub op: Op, pub op1: Option<Address>, pub op2: Option<Address>, pub op3: Option<Address> }
-```
-
-Opcodes: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ASN`, `ASIZE`, `LOAD`, `STORE`, `NEWARRAY`, `GOTO`, `LAB`, `BLT`, `BLE`, `BGT`, `BGE`, `BEQ`, `BNE`, `PARM`, `CALL`, `RET`.
-
-**`CodegenContext`** — owns all codegen state that lives outside the AST:
-- Label counter (`genlabel()` mints fresh `Address::lab(id)`)
-- Per-method local offset counter (`genlocal()` allocates 8-byte slots starting at `loc:8`)
-- `node_info: HashMap<u32, NodeInfo>` — parallel structure keyed by `Tree::id` storing `icode`, `addr`, `first`, `follow`, `on_true`, `on_false`
-- `var_addrs: HashMap<String, Address>` — variable layout map keyed by `(scope_ptr, name)`
-- String pool and global variable list
-
-### Pipeline
+Five passes over the typed syntax tree produce TAC:
 
 ```
-analyze(tree) → SemanticResult
-      ↓
-assign_addresses()   Pass 1: walk symtab tree, assign Address to every variable/param
-      ↓
-genfirst(tree)       Pass 2: post-order, synthesize `first` entry-point labels
-      ↓
-genfollow(tree)      Pass 3: pre-order, inherit `follow` exit-point labels
-      ↓
-gentargets(tree)     Pass 4: pre-order, inherit `on_true`/`on_false` for Boolean exprs
-      ↓
-gencode(tree)        Pass 5: post-order, emit Vec<Tac> for each node
-      ↓
-emit(tree, ctx)      Render assembler-style text output
+assign_addresses → genfirst → genfollow → gentargets → gencode → emit
 ```
 
-### Variable layout
+See the README architecture section for full details on `Address`, `Tac`, and `CodegenContext`.
 
-Local offsets are assigned per-method starting at `loc:8` (reserving `loc:0` for the implicit self pointer), allocating 8 bytes per slot in declaration order:
+## Bytecode Generation + VM (Chapters 12+13)
 
-| Symbol | Kind | Address |
-|--------|------|---------|
-| `argv` | Param | `loc:8` |
-| `x` | Local | `loc:16` |
-| temporaries | Compiler-generated | `loc:24`, `loc:32`, … |
+### Bytecode format
 
-### Key design decisions
+Each instruction is a fixed 8-byte word: `[opcode:1][region:1][operand:6, little-endian]`.
 
-- **AST stays clean** — codegen state lives entirely in `CodegenContext::node_info`, keyed by `Tree::id`. No new fields added to `Tree`.
-- **`addr_of` returns `Address` (not `Option`)** — falls back to `imm:0` for non-value nodes (operator leaves), eliminating unwrap noise at call sites.
-- **`while` guarantees an exit label** — if a `WhileStmt` is the last statement in a method (no natural follow), `gen_while` mints a fresh label rather than leaving `on_false` as `None`.
-- **`reemit_condition`** — because `gen_rel_expr` runs before `gen_while` has set `on_false`, the while handler re-emits the condition's branch instructions after setting `on_false`.
-- **Method name mangling** — dotted calls like `System.out.println(...)` appear in the tree as `MethodCall#0` with a `FieldAccess` chain as `kids[0]`. The codegen detects this, skips the chain recursion (which would emit spurious LOADs), walks only the args, and emits `CALL PrintStream__println` via `mangle_method`.
-- **String pool** — string literals are interned with a `Lab`-region label (printed as `L0:`) and referenced in instructions via a `Strings`-region address (`strings:0`).
+The `.j0` binary file layout:
+```
+Word 0:   magic   "Jzero!!\0"
+Word 1:   version "1.0\0\0\0\0\0"
+Word 2:   first-instruction word offset
+Word 3…:  data section (string literals, NUL-terminated)
+Word N…:  startup sequence + instructions
+```
+
+The startup sequence calls `main` with the real `argc` (number of CLI arguments passed after `--run`), so `argv.length` behaves correctly without any hardcoding.
+
+### Instruction set (23 opcodes)
+
+`HALT NOOP ADD SUB MUL DIV MOD NEG PUSH POP CALL RETURN GOTO BIF LT LE GT GE EQ NEQ LOCAL LOAD STORE`
+
+### TAC → bytecode translation
+
+| TAC | Bytecode |
+|---|---|
+| `ADD op1,op2,op3` | `PUSH op2, PUSH op3, ADD, POP op1` |
+| `ASN op1,op2` | `PUSH op2, POP op1` |
+| `BGT label,op2,op3` | `PUSH op2, PUSH op3, GT, BIF label` |
+| `PARM arg` + `CALL fn,n` | `PUSH fn_addr, PUSH arg, …, CALL n` |
+| `Proc` (method entry) | `LOCAL n` (pre-allocates local slots) |
+
+Label resolution is two-pass: pass 1 records byte offsets, pass 2 patches branch targets. All GOTO/BIF targets are then relocated by `code_base_bytes` to be absolute offsets from word 0.
+
+### VM calling convention
+
+Saved registers `(ip, bp, fn_slot)` are kept in an off-stack `call_stack: Vec<(usize, i64, i64)>`, leaving the data stack clean for locals:
+
+```
+stack[bp+0] = fn_addr  (loc:0)
+stack[bp+1] = arg0     (loc:8)
+stack[bp+2] = local0   (loc:16)
+…
+```
+
+`LOCAL n` pre-allocates all local slots at function entry so expression temporaries never overwrite them.
 
 ## Parser Design Notes
 
-**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities. grmtools resolved conflicts in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
-
-**Key adaptations:**
-- **Left-factored `BlockStmt`** — when an `IDENTIFIER` starts a statement, the parser defers the type-vs-expression decision using `TreeAction` closures.
-- **`FieldAccess` instead of `QualifiedName`** — dotted names are represented as nested `FieldAccess` nodes, built left-recursively in `AccessExpr`.
-- **`VarDeclarator` nesting for arrays** — `argv[]` produces `VarDeclarator#1(VarDeclarator#0(argv))` to explicitly encode array brackets.
-- **`DoubleLit` regex fix** — the original regex matched a bare `.` as a double literal, breaking all method-call parsing. Fixed to require at least one digit on either side of the decimal point.
+**Why LALRPOP over grmtools/lrpar?** The original grammar has inherent LALR(1) ambiguities. grmtools resolved conflicts silently in ways that broke dotted method calls like `System.out.println(...)`. LALRPOP's LR(1) lane table algorithm handles more grammars without conflicts, and its explicit conflict reporting made it easier to restructure the grammar correctly.
 
 ## References
 

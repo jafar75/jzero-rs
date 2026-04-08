@@ -9,19 +9,21 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: j0 <source.java> [--png] [--codegen]");
-        eprintln!();
-        eprintln!("Parses a Jzero source file and outputs the syntax tree.");
+        eprintln!("Usage: j0 <source.java> [--png] [--codegen] [--bytecode] [--run]");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --png      Also render the DOT file to PNG using Graphviz");
-        eprintln!("  --codegen  Run semantic analysis + code generation, print IR");
+        eprintln!("  --png       Render the DOT file to PNG using Graphviz");
+        eprintln!("  --codegen   Run semantic analysis + codegen, print TAC IR");
+        eprintln!("  --bytecode  Compile to bytecode, print assembler listing");
+        eprintln!("  --run       Compile to bytecode and execute it in the VM");
         process::exit(1);
     }
 
     let source_path = &args[1];
-    let render_png  = args.iter().any(|a| a == "--png");
-    let do_codegen  = args.iter().any(|a| a == "--codegen");
+    let render_png    = args.iter().any(|a| a == "--png");
+    let do_codegen    = args.iter().any(|a| a == "--codegen");
+    let do_bytecode   = args.iter().any(|a| a == "--bytecode");
+    let do_run        = args.iter().any(|a| a == "--run");
 
     // Read source file
     let source = match fs::read_to_string(source_path) {
@@ -32,10 +34,8 @@ fn main() {
         }
     };
 
-    // Reset node IDs for deterministic output
     reset_ids();
 
-    // Parse and build syntax tree
     let mut tree = match parse_tree(&source) {
         Ok(t) => t,
         Err(e) => {
@@ -44,34 +44,61 @@ fn main() {
         }
     };
 
-    // ── Codegen path ──────────────────────────────────────────────────────────
+    // ── TAC IR path (--codegen) ───────────────────────────────────────────────
     if do_codegen {
         let sem = jzero_semantic::analyze(&mut tree);
-
-        // Print any semantic errors
-        for err in &sem.errors {
-            eprintln!("{}", err);
-        }
-
-        // Generate intermediate code
+        for err in &sem.errors { eprintln!("{}", err); }
         let ctx = jzero_codegen::generate(&tree, &sem);
-
-        // Emit and print the assembler-style output
         let asm = jzero_codegen::emit::emit(&tree, &ctx);
         print!("{}", asm);
+        if sem.errors.is_empty() { println!("no errors"); }
+        return;
+    }
 
-        if sem.errors.is_empty() {
-            println!("no errors");
+    // ── Bytecode path (--bytecode and/or --run) ───────────────────────────────
+    if do_bytecode || do_run {
+        let sem = jzero_semantic::analyze(&mut tree);
+        for err in &sem.errors { eprintln!("{}", err); }
+        if !sem.errors.is_empty() { process::exit(1); }
+
+        // Collect program arguments (everything after the source file and flags).
+        let prog_args: Vec<String> = args[2..].iter()
+            .filter(|a| !a.starts_with("--"))
+            .cloned()
+            .collect();
+        let argc = prog_args.len() as i64;
+
+        let ctx    = jzero_codegen::generate(&tree, &sem);
+        let output = jzero_codegen::pipeline::compile_bytecode(&tree, &ctx, argc);
+
+        if do_bytecode {
+            print!("{}", output.text);
+            let j0_path = j0_path(source_path);
+            if let Err(e) = fs::write(&j0_path, &output.binary) {
+                eprintln!("Error writing '{}': {}", j0_path, e);
+                process::exit(1);
+            }
+            eprintln!(".j0 written to: {}", j0_path);
+        }
+
+        if do_run {
+            match jzero_vm::run(&output.binary, &prog_args) {
+                Ok(out) => {
+                    print!("{}", out);
+                    println!("no errors");
+                }
+                Err(e) => {
+                    eprintln!("VM error: {}", e);
+                    process::exit(1);
+                }
+            }
         }
         return;
     }
 
     // ── Default path: tree + DOT ──────────────────────────────────────────────
-
-    // Print tree to stdout (like the book's j0)
     print!("{}", tree);
 
-    // Write DOT file
     let dot_path = format!("{}.dot", source_path);
     let dot = tree.to_dot();
     if let Err(e) = fs::write(&dot_path, &dot) {
@@ -80,25 +107,29 @@ fn main() {
     }
     eprintln!("DOT written to: {}", dot_path);
 
-    // Optionally render PNG
     if render_png {
         let png_path = format!("{}.png", source_path);
         match Command::new("dot")
             .args(["-Tpng", &dot_path, "-o", &png_path])
             .status()
         {
-            Ok(status) if status.success() => {
-                eprintln!("PNG written to: {}", png_path);
-            }
-            Ok(status) => {
-                eprintln!("dot exited with: {}", status);
-                process::exit(1);
-            }
+            Ok(s) if s.success() => eprintln!("PNG written to: {}", png_path),
+            Ok(s) => { eprintln!("dot exited with: {}", s); process::exit(1); }
             Err(e) => {
                 eprintln!("Failed to run 'dot': {}", e);
-                eprintln!("Install Graphviz to render PNGs: sudo apt install graphviz");
+                eprintln!("Install Graphviz: sudo apt install graphviz");
                 process::exit(1);
             }
         }
+    }
+}
+
+/// Derive the `.j0` output path from the source path.
+/// `tests/hello.java` → `tests/hello.j0`
+fn j0_path(source: &str) -> String {
+    if let Some(stem) = source.strip_suffix(".java") {
+        format!("{}.j0", stem)
+    } else {
+        format!("{}.j0", source)
     }
 }
