@@ -1,27 +1,29 @@
-//! The Jzero bytecode interpreter machine (Chapter 12).
+//! The Jzero bytecode interpreter machine (Chapters 12 + 15).
 //!
 //! # Memory model
 //!
 //! ```text
-//! code   – the full .j0 image as bytes; instructions are read from here
-//! data   – the static data section (string literals, globals), extracted
-//!           from the image at load time; indexed by byte offset
-//! stack  – holds fn_addr, args, locals, and temporaries only.
-//!           Saved registers (ip, bp) are kept off-stack in `call_stack`.
-//! heap   – (stub) object / array heap; not yet implemented
+//! code        – the full .j0 image as bytes
+//! data        – static data section (string literals, NUL-terminated)
+//! stack       – fn_addr, args, locals, temporaries (integers and string keys)
+//! string_pool – runtime string storage: maps i64 key ↔ String value
+//!               String keys are negative integers (-1, -2, …) so they never
+//!               collide with data-section byte offsets (which are ≥ 0).
 //! ```
 //!
-//! # Registers
+//! # String representation
 //!
-//! ```text
-//! ip  – instruction pointer: byte offset from word 0 of the image
-//! sp  – stack pointer: index of the top occupied slot (-1 = empty)
-//! bp  – base pointer: index of the fn_addr slot for the current frame
-//!        stack[bp+0] = fn_addr  (loc:0)
-//!        stack[bp+1] = arg0     (loc:8)
-//!        stack[bp+2] = local0   (loc:16)
-//! hp  – heap pointer (stub)
-//! ```
+//! String literals live in the data section as NUL-terminated UTF-8.
+//! Their TAC address is a `Strings`-region offset (≥ 0).
+//!
+//! At runtime, `SPUSH` reads the raw string from the data section and interns
+//! it in the `StringPool`, pushing the resulting negative key onto the stack.
+//! `SADD` pops two keys, concatenates the strings, interns the result, and
+//! pushes the new key.  `SPOP` pops a key and stores it back to a stack slot
+//! (the string value stays in the pool).
+//!
+//! `do_println` checks whether the value on the stack is a pool key (< 0) or
+//! a data-section offset (≥ 0) and reads the string accordingly.
 //!
 //! # Calling convention
 //!
@@ -30,30 +32,77 @@
 //!         ↑ fn_slot              ↑ sp
 //!
 //! CALL saves (ip, bp, fn_slot) onto the off-stack `call_stack`, sets
-//! bp = fn_slot, ip = fn_addr.  The callee's locals start at bp+n+1.
+//! bp = fn_slot, ip = fn_addr.
 //!
-//! RETURN pops (saved_ip, saved_bp, fn_slot) from `call_stack`, restores
-//! ip and bp, and sets sp = fn_slot - 1 to clean up the entire frame.
+//! RETURN pops (saved_ip, saved_bp, fn_slot), restores ip and bp, and sets
+//! sp = fn_slot - 1 to clean up the entire frame.
 
+use std::collections::HashMap;
 use jzero_codegen::byc::{Byc, BycRegion, Op};
 
 const STACK_WORDS: usize = 100_000;
 const MAGIC:   &[u8; 8] = b"Jzero!!\0";
 const VERSION: &[u8; 8] = b"1.0\0\0\0\0\0";
 
+// ---------------------------------------------------------------------------
+// String pool (Chapter 15)
+// ---------------------------------------------------------------------------
+
+/// Runtime string storage.
+///
+/// Keys are negative i64 values (-1, -2, …) so they are visually distinct
+/// from data-section offsets (≥ 0) when inspecting the stack.
+pub struct StringPool {
+    by_key:    HashMap<i64, String>,
+    by_value:  HashMap<String, i64>,
+    next_key:  i64,   // decrements: -1, -2, …
+}
+
+impl StringPool {
+    pub fn new() -> Self {
+        StringPool {
+            by_key:   HashMap::new(),
+            by_value: HashMap::new(),
+            next_key: -1,
+        }
+    }
+
+    /// Intern a string, returning a unique negative key.
+    /// If the string is already in the pool, returns the existing key.
+    pub fn put(&mut self, s: String) -> i64 {
+        if let Some(&key) = self.by_value.get(&s) {
+            return key;
+        }
+        let key = self.next_key;
+        self.next_key -= 1;
+        self.by_key.insert(key, s.clone());
+        self.by_value.insert(s, key);
+        key
+    }
+
+    /// Retrieve a string by key.  Returns `None` if the key is unknown.
+    pub fn get(&self, key: i64) -> Option<&str> {
+        self.by_key.get(&key).map(|s| s.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// J0Machine
+// ---------------------------------------------------------------------------
+
 pub struct J0Machine {
-    code:       Vec<u8>,
-    data:       Vec<u8>,
-    stack:      Vec<i64>,
-    ip:         usize,
-    sp:         i64,
-    /// Index of fn_addr slot for the current frame.
-    bp:         i64,
-    /// Off-stack call save area.  Each entry: (saved_ip, saved_bp, fn_slot).
-    call_stack: Vec<(usize, i64, i64)>,
+    code:        Vec<u8>,
+    data:        Vec<u8>,
+    stack:       Vec<i64>,
+    ip:          usize,
+    sp:          i64,
+    bp:          i64,
+    call_stack:  Vec<(usize, i64, i64)>,
     #[allow(dead_code)]
-    hp:         i64,
-    pub output: String,
+    hp:          i64,
+    /// Runtime string pool (Chapter 15).
+    pub spool:   StringPool,
+    pub output:  String,
 }
 
 impl J0Machine {
@@ -81,7 +130,7 @@ impl J0Machine {
 
         let data  = bytes[24..first_instr_byte].to_vec();
         let stack = vec![0i64; STACK_WORDS];
-        let _ = argc; // argc is passed via startup sequence, not pre-loaded
+        let _ = argc; // argc passed via startup sequence
 
         Ok(J0Machine {
             code:       bytes.to_vec(),
@@ -92,6 +141,7 @@ impl J0Machine {
             bp:         -1,
             call_stack: Vec::new(),
             hp:         0,
+            spool:      StringPool::new(),
             output:     String::new(),
         })
     }
@@ -110,7 +160,7 @@ impl J0Machine {
                 Op::Halt => break,
                 Op::Noop => {}
 
-                // ── Arithmetic ──────────────────────────────────────────
+                // ── Integer arithmetic ──────────────────────────────────
                 Op::Add => { let (b,a) = self.pop2(); self.push(a + b); }
                 Op::Sub => { let (b,a) = self.pop2(); self.push(a - b); }
                 Op::Mul => { let (b,a) = self.pop2(); self.push(a * b); }
@@ -125,6 +175,42 @@ impl J0Machine {
                     self.push(a % b);
                 }
                 Op::Neg => { let a = self.pop(); self.push(-a); }
+
+                // ── String operations (Chapter 15) ───────────────────────
+                //
+                // SPUSH: resolve the operand to a data-section byte offset
+                //        (always R_IMM for Strings-region addresses), read
+                //        the NUL-terminated string, intern it in the pool,
+                //        and push the negative pool key.
+                Op::Spush => {
+                    let offset = self.deref(byc.region, byc.opnd)? as usize;
+                    let s = self.read_string(offset)?;
+                    let key = self.spool.put(s);
+                    self.push(key);
+                }
+
+                // SPOP: pop a pool key from the stack and store it into the
+                //       destination stack slot (the string stays in the pool).
+                Op::Spop => {
+                    let key = self.pop();
+                    self.assign(byc.region, byc.opnd, key)?;
+                }
+
+                // SADD: pop two pool keys, concatenate the strings, intern
+                //       the result, and push the new key.
+                Op::Sadd => {
+                    let key_b = self.pop();
+                    let key_a = self.pop();
+                    let s_a = self.spool.get(key_a)
+                        .ok_or_else(|| format!("SADD: unknown key {}", key_a))?
+                        .to_owned();
+                    let s_b = self.spool.get(key_b)
+                        .ok_or_else(|| format!("SADD: unknown key {}", key_b))?
+                        .to_owned();
+                    let result = s_a + &s_b;
+                    let key = self.spool.put(result);
+                    self.push(key);
+                }
 
                 // ── Comparisons ─────────────────────────────────────────
                 Op::Lt  => { let (b,a) = self.pop2(); self.push((a <  b) as i64); }
@@ -180,7 +266,6 @@ impl J0Machine {
                     let f       = self.stack[fn_slot as usize];
 
                     if f >= 0 {
-                        // Save state off-stack so locals start cleanly at bp+n+1.
                         self.call_stack.push((self.ip, self.bp, fn_slot));
                         self.bp = fn_slot;
                         self.ip = f as usize;
@@ -315,9 +400,10 @@ impl J0Machine {
     }
 
     // -----------------------------------------------------------------------
-    // String / runtime helpers
+    // String helpers (used by runtime and SPUSH)
     // -----------------------------------------------------------------------
 
+    /// Read a NUL-terminated UTF-8 string from the data section at byte offset `off`.
     pub fn read_string(&self, off: usize) -> Result<String, String> {
         if off >= self.data.len() {
             return Err(format!("string offset out of range: {}", off));
@@ -328,6 +414,22 @@ impl J0Machine {
             .unwrap_or(self.data.len() - off);
         String::from_utf8(self.data[off..off + end].to_vec())
             .map_err(|e| format!("invalid utf8 in string: {}", e))
+    }
+
+    /// Resolve a stack value to a printable string.
+    ///
+    /// - Negative values are string-pool keys (set by SPUSH/SADD).
+    /// - Non-negative values are data-section byte offsets (set by PUSH for
+    ///   Strings-region addresses used directly with println).
+    pub fn resolve_string(&self, val: i64) -> String {
+        if val < 0 {
+            self.spool.get(val)
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| format!("<unknown key {}>", val))
+        } else {
+            self.read_string(val as usize)
+                .unwrap_or_else(|_| val.to_string())
+        }
     }
 
     pub fn peek(&self) -> i64 { self.stack[self.sp as usize] }

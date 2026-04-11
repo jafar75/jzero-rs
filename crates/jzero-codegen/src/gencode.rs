@@ -86,7 +86,19 @@ fn gen_add_expr(tree: &Tree, ctx: &mut CodegenContext) {
     let dst = ctx.genlocal();
     let lhs = addr_of(&tree.kids[0], ctx);
     let rhs = addr_of(&tree.kids[2], ctx);
-    let op  = if tree.rule == 0 { Op::Add } else { Op::Sub };
+
+    // Choose opcode based on type: String + String → SADD, else ADD/SUB.
+    let op = match tree.typ.as_ref().map(|t| t.basetype()) {
+        Some(b) if b == "String" => {
+            if tree.rule != 0 {
+                // String subtraction is a semantic error — emit SADD anyway
+                // (the type checker already reported the error).
+            }
+            Op::Sadd
+        }
+        _ => if tree.rule == 0 { Op::Add } else { Op::Sub },
+    };
+
     let mut icode = concat_kids_icode(tree, ctx);
     icode.push(Tac::new3(op, dst.clone(), lhs, rhs));
     let info = ctx.node_mut(tree.id);

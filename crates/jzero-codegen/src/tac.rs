@@ -58,6 +58,8 @@ pub enum Op {
     Mod,
     /// op1 = -op2
     Neg,
+    /// op1 = op2 ++ op3 (string concatenation)
+    Sadd,
 
     // ── Data movement ───────────────────────────────────────────────────────
     /// op1 = op2  (assignment / copy)
@@ -121,6 +123,7 @@ impl std::fmt::Display for Op {
             Op::Div        => "DIV",
             Op::Mod        => "MOD",
             Op::Neg        => "NEG",
+            Op::Sadd       => "SADD",
             Op::Asn        => "ASN",
             Op::Addr       => "ADDR",
             Op::Asize      => "ASIZE",

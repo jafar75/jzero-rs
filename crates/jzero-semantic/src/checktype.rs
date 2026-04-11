@@ -120,9 +120,6 @@ pub fn check_type(
 
         // ── ArrayCreation: new int[n] → Array(int) ────────────────────────
         "ArrayCreation" => {
-            // kids[0] is a type keyword leaf (INT, DOUBLE, etc.) or IDENTIFIER.
-            // Its typ may not be stamped yet (keywords aren't handled by
-            // assign_leaf_types), so derive it directly from the token.
             let elem_typ = tree.kids.first().and_then(|k| {
                 k.typ.clone().or_else(|| {
                     k.tok.as_ref().and_then(|t| match t.category.as_str() {
@@ -182,8 +179,6 @@ pub fn check_type(
         // ── MethodCall ────────────────────────────────────────────────────
         "MethodCall" => {
             match tree.rule {
-                // rule 0: simple call foo(args)
-                // kids[0] = IDENTIFIER, kids[1..] = args
                 0 => {
                     let name = tree.kids.first()
                         .and_then(|k| k.tok.as_ref())
@@ -217,8 +212,6 @@ pub fn check_type(
                         }
                     }
                 }
-                // rule 2: dotted call base.method(args)
-                // kids[0] = base expr, kids[1] = IDENTIFIER (method name), kids[2..] = args
                 2 => {
                     if let Some(method_typ) = dequalify(tree) {
                         if let TypeInfo::Method(mt) = method_typ {
@@ -237,8 +230,6 @@ pub fn check_type(
         }
 
         // ── ReturnStmt ────────────────────────────────────────────────────
-        // rule 0: return <expr>;   kids[0] = expr
-        // rule 1: return;          no kids
         "ReturnStmt" => {
             let return_typ = lookup_in_stab_by_name(tree, "return");
             match (return_typ, tree.rule) {
@@ -260,7 +251,6 @@ pub fn check_type(
                     }
                 }
                 (Some(rt), 1) => {
-                    // void return — OK if declared return type is void
                     if rt.basetype() == "void" {
                         tree.set_typ(TypeInfo::void());
                     }
@@ -349,7 +339,6 @@ fn check_kids(
             false
         }
 
-        // Walk all kids, then let check_type handle ReturnStmt
         "ReturnStmt" => {
             let n = tree.kids.len();
             for i in 0..n {
@@ -358,8 +347,6 @@ fn check_kids(
             false
         }
 
-        // For MethodCall: walk all kids first (type the args/base), then
-        // let check_type handle the call itself
         "MethodCall" => {
             let n = tree.kids.len();
             for i in 0..n {
@@ -368,7 +355,6 @@ fn check_kids(
             false
         }
 
-        // ArrayCreation: walk kids (type the size expr + element type leaf)
         "ArrayCreation" => {
             let n = tree.kids.len();
             for i in 0..n {
@@ -377,7 +363,6 @@ fn check_kids(
             false
         }
 
-        // ArrayAccess: walk both kids (base + index)
         "ArrayAccess" => {
             let n = tree.kids.len();
             for i in 0..n {
@@ -405,8 +390,6 @@ fn check_kids(
 
 // ─── cksig ───────────────────────────────────────────────────────────────────
 
-/// Check argument types against a method's parameter list.
-/// Emits a `TypeCheckResult` per argument (operator = "param").
 fn cksig(
     tree: &Tree,
     params: &[jzero_symtab::Parameter],
@@ -443,15 +426,8 @@ fn cksig(
 
 // ─── dequalify ───────────────────────────────────────────────────────────────
 
-/// Resolve a dotted method call to its `MethodType`.
-///
-/// For `MethodCall` rule 2: kids[0]=base, kids[1]=method-name IDENTIFIER
-/// Looks up the base type, verifies it's a class, looks up the method in
-/// that class's symbol table.
 fn dequalify(tree: &Tree) -> Option<TypeInfo> {
-    // kids[0] = base expression (already typed)
     let base_typ = tree.kids.first().and_then(|k| k.typ.clone())?;
-
     match base_typ {
         TypeInfo::Class(ref ct) => {
             let st = ct.st.as_ref()?;
@@ -472,7 +448,6 @@ fn check_types(tree: &Tree, op1: &TypeInfo, op2: &TypeInfo) -> TypeCheckResult {
 
     let ok = match operator.as_str() {
         "=" | "+=" | "-=" => {
-            // Array assignment: both must be arrays with same element type
             if op1.basetype() == "array" && op2.basetype() == "array" {
                 if let (TypeInfo::Array(e1), TypeInfo::Array(e2)) = (op1, op2) {
                     e1.same_base(e2)
@@ -481,8 +456,18 @@ fn check_types(tree: &Tree, op1: &TypeInfo, op2: &TypeInfo) -> TypeCheckResult {
                 op1.same_base(op2)
             }
         }
-        "+" | "-" | "*" | "/" | "%" =>
-            op1.same_base(op2) && op1.is_numeric(),
+        "+" | "-" | "*" | "/" | "%" => {
+            if op1.same_base(op2) {
+                // String supports + (concatenation) but not -, *, /, %
+                if op1.basetype() == "String" {
+                    operator == "+"
+                } else {
+                    op1.is_numeric()
+                }
+            } else {
+                false
+            }
+        }
         "<" | ">" | "<=" | ">=" =>
             op1.same_base(op2) && op1.is_numeric(),
         "==" | "!=" =>
@@ -588,15 +573,10 @@ public class funtest {
         println!("\n=== funtest type checks ===");
         for r in &type_results { println!("{}", r); }
 
-        // return 0 in foo: return on int and int -> OK
         let ret = type_results.iter().find(|r| r.operator == "return");
         assert!(ret.is_some(), "expected return typecheck");
         assert!(ret.unwrap().ok, "return int should be OK");
 
-        // param checks for foo(0, 1, "howdy")
-        // 3 param checks for foo(0, 1, "howdy")
-        // System.out.println uses predefined stab which lacks full ClassType,
-        // so its param check is not emitted — that's acceptable for now.
         let params: Vec<_> = type_results.iter().filter(|r| r.operator == "param").collect();
         assert_eq!(params.len(), 3, "expected 3 param checks for foo");
         assert!(params.iter().all(|r| r.ok), "all params should be OK");
@@ -620,12 +600,10 @@ public class T {
         println!("\n=== array type checks ===");
         for r in &type_results { println!("{}", r); }
 
-        // x = new int[3]: array = array -> OK
         let arr_assign = type_results.iter().find(|r| r.operator == "=" && r.op1 == "array");
         assert!(arr_assign.is_some(), "expected array assignment typecheck");
         assert!(arr_assign.unwrap().ok);
 
-        // y = x[0]: int = int -> OK
         let elem_assign = type_results.iter()
             .filter(|r| r.operator == "=" && r.op1 == "int")
             .last();
@@ -697,5 +675,38 @@ public class T {
     fn test_typecheck_result_display_fail() {
         let r = TypeCheckResult::new(5, "+", &TypeInfo::int(), &TypeInfo::string(), false);
         assert_eq!(r.to_string(), "line 5: typecheck + on a String and a int -> FAIL");
+    }
+
+    #[test]
+    fn test_string_concatenation_typechecks_ok() {
+        let src = r#"
+public class T {
+    public static void main(String argv[]) {
+        String s;
+        s = "hello, " + "jzero!";
+    }
+}
+"#;
+        let (_result, type_results) = run(src);
+        let add = type_results.iter().find(|r| r.operator == "+");
+        assert!(add.is_some(), "expected + typecheck");
+        assert!(add.unwrap().ok, "String + String should be OK");
+        assert_eq!(add.unwrap().op1, "String");
+    }
+
+    #[test]
+    fn test_string_subtraction_typechecks_fail() {
+        let src = r#"
+public class T {
+    public static void main(String argv[]) {
+        String s;
+        s = "hello" - "world";
+    }
+}
+"#;
+        let (_result, type_results) = run(src);
+        let sub = type_results.iter().find(|r| r.operator == "-");
+        assert!(sub.is_some(), "expected - typecheck");
+        assert!(!sub.unwrap().ok, "String - String should FAIL");
     }
 }

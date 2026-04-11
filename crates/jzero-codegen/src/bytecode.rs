@@ -64,6 +64,15 @@ fn pass1(icode: &[Tac]) -> (Vec<Byc>, HashMap<i64, usize>) {
             // ----------------------------------------------------------------
             TacOp::Neg => emit_unary(&mut rv, Op::Neg, instr),
 
+            // SADD — string concatenation (Chapter 15).
+            // SPUSH op2, SPUSH op3, SADD, SPOP op1
+            TacOp::Sadd => {
+                rv.push(Byc::new(Op::Spush, instr.op2.as_ref()));
+                rv.push(Byc::new(Op::Spush, instr.op3.as_ref()));
+                rv.push(Byc::no_operand(Op::Sadd));
+                rv.push(Byc::new(Op::Spop,  instr.op1.as_ref()));
+            }
+
             // ----------------------------------------------------------------
             // Assignment: PUSH op2, POP op1
             // ----------------------------------------------------------------

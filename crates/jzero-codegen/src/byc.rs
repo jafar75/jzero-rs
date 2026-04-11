@@ -39,6 +39,13 @@ pub enum Op {
     Local  = 21,
     Load   = 22,
     Store  = 23,
+    // ── Chapter 15 — string operations ─────────────────────────────────────
+    /// Push a string (by data-section offset) onto the string stack.
+    Spush  = 24,
+    /// Pop a string from the string stack and store at a memory location.
+    Spop   = 25,
+    /// Pop two strings, concatenate, push result.
+    Sadd   = 26,
 }
 
 impl Op {
@@ -67,6 +74,9 @@ impl Op {
             Op::Local  => "local",
             Op::Load   => "load",
             Op::Store  => "store",
+            Op::Spush  => "spush",
+            Op::Spop   => "spop",
+            Op::Sadd   => "sadd",
         }
     }
 
@@ -95,6 +105,9 @@ impl Op {
             21 => Some(Op::Local),
             22 => Some(Op::Load),
             23 => Some(Op::Store),
+            24 => Some(Op::Spush),
+            25 => Some(Op::Spop),
+            26 => Some(Op::Sadd),
             _  => None,
         }
     }
@@ -279,16 +292,28 @@ mod tests {
 
     #[test]
     fn text_format() {
-        assert_eq!(Byc::imm(Op::Push, 42).text(),           "\tpush 42");
-        assert_eq!(Byc::no_operand(Op::Add).text(),          "\tadd");
-        assert_eq!(Byc::imm(Op::Local, 3).text(),            "\tlocal 3");
+        assert_eq!(Byc::imm(Op::Push, 42).text(),    "\tpush 42");
+        assert_eq!(Byc::no_operand(Op::Add).text(),   "\tadd");
+        assert_eq!(Byc::imm(Op::Local, 3).text(),     "\tlocal 3");
+        assert_eq!(Byc::no_operand(Op::Sadd).text(),  "\tsadd");
+        assert_eq!(Byc::imm(Op::Spush, 0).text(),     "\tspush 0");
     }
 
     #[test]
     fn opcode_roundtrip() {
-        for v in 1u8..=23 {
+        for v in 1u8..=26 {
             let op = Op::from_u8(v).unwrap();
             assert_eq!(op as u8, v);
+        }
+    }
+
+    #[test]
+    fn sadd_spush_spop_roundtrip() {
+        for op in [Op::Spush, Op::Spop, Op::Sadd] {
+            let b = Byc::imm(op, 0);
+            let encoded = b.binary();
+            let decoded = Byc::from_binary(&encoded).unwrap();
+            assert_eq!(decoded.op, op);
         }
     }
 }
