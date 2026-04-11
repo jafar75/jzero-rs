@@ -4,7 +4,6 @@
 //! Collects the flat TAC list, translates it to bytecode, serialises the
 //! string pool into the data section, and assembles the `.j0` binary image.
 
-use std::collections::HashMap;
 
 use jzero_ast::tree::Tree;
 

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use jzero_ast::tree::Tree;
 use jzero_symtab::{SymTab, SymTabEntry, TypeInfo, entry::SymbolKind};
 
-use crate::calctype::{calc_type, assign_type, mksig};
+use crate::calctype::{calc_type, assign_type};
 use crate::error::SemanticError;
 
 // ─── Public entry point ───────────────────────────────────────────────────────

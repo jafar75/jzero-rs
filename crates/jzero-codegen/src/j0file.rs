@@ -65,7 +65,6 @@ pub fn assemble(
     // R_ABS operand that represents a label (GOTO / BIF targets).
     // -----------------------------------------------------------------------
     let relocated: Vec<Byc> = bycs.iter().map(|b| {
-        use crate::byc::BycRegion;
         match b.op {
             Op::Goto | Op::Bif => {
                 let mut r = b.clone();
