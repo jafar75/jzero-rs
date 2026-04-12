@@ -1,8 +1,39 @@
 # jzero-rs
 
+[![Crates.io](https://img.shields.io/crates/v/jzero.svg)](https://crates.io/crates/jzero)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A compiler + bytecode VM for **Jzero** — a small subset of Java — written entirely in Rust.
 
 This project follows the book *Build Your Own Programming Language (Edition 2)* by Clinton L. Jeffery, replacing the original Java/Unicon tooling with idiomatic Rust equivalents.
+
+## Using as a library
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+jzero = "0.1.0"
+```
+
+Then use the `Compiler` API:
+
+```rust
+use jzero::Compiler;
+
+let out = Compiler::new()
+    .source(r#"
+        public class hello {
+            public static void main(String argv[]) {
+                System.out.println("hello, jzero!");
+            }
+        }
+    "#)
+    .run(&[])
+    .unwrap();
+
+println!("{}", out.stdout); // hello, jzero!
+```
 
 ## What is Jzero?
 
@@ -31,6 +62,7 @@ Chapters 10 (IDE/syntax coloring), 11 (transpiler), 14 (native code), 16 (domain
 jzero-rs/
 ├── Cargo.toml
 ├── crates/
+│   ├── jzero/              # Public facade crate (published to crates.io)
 │   ├── jzero-lexer/        # Lexical analysis (Logos)
 │   ├── jzero-parser/       # Parsing & syntax tree construction (LALRPOP)
 │   ├── jzero-ast/          # Syntax tree data structures & DOT output
@@ -38,7 +70,7 @@ jzero-rs/
 │   ├── jzero-semantic/     # Symbol table construction & type checking
 │   ├── jzero-codegen/      # TAC + bytecode generation
 │   ├── jzero-vm/           # Bytecode interpreter + string pool
-│   └── jzero-cli/          # CLI tool (j0)
+│   └── jzero-cli/          # CLI tool (j0, not published)
 └── tests/
     ├── hello.java           # Minimal hello-world test
     ├── hello_loop.java      # End-to-end golden test (loop + array + I/O)
@@ -48,7 +80,7 @@ jzero-rs/
 Clean one-way dependency chain:
 
 ```
-jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic → jzero-codegen → jzero-vm
+jzero-lexer → jzero-symtab → jzero-ast → jzero-parser → jzero-semantic → jzero-codegen → jzero-vm → jzero
 ```
 
 ## Tool Mapping
