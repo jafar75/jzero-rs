@@ -1,0 +1,14 @@
+[package]
+name    = "jzero"
+version = "0.1.0"
+edition = "2024"
+description = "A compiler and bytecode VM for the Jzero language (a subset of Java)"
+keywords    = ["compiler", "bytecode", "interpreter", "language", "jzero"]
+categories  = ["compilers"]
+
+[dependencies]
+jzero-ast      = { path = "../jzero-ast" }
+jzero-parser   = { path = "../jzero-parser" }
+jzero-semantic = { path = "../jzero-semantic" }
+jzero-codegen  = { path = "../jzero-codegen" }
+jzero-vm       = { path = "../jzero-vm" }

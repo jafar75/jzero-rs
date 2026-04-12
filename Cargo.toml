@@ -9,6 +9,7 @@ members = [
     "crates/jzero-semantic",
     "crates/jzero-codegen",
     "crates/jzero-vm",
+    "crates/jzero",
 ]
 
 [workspace.package]
