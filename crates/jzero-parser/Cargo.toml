@@ -1,5 +1,8 @@
 [package]
 name = "jzero-parser"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "LR(1) parser for the Jzero language"
 version = "0.1.0"
 edition = "2024"
 
@@ -8,6 +11,6 @@ lalrpop.workspace = true
 
 [dependencies]
 lalrpop-util.workspace = true
-jzero-lexer = { path = "../jzero-lexer" }
-jzero-ast = { path = "../jzero-ast" }
+jzero-lexer = { path = "../jzero-lexer", version = "0.1.0" }
+jzero-ast = { path = "../jzero-ast", version = "0.1.0" }
 logos.workspace = true

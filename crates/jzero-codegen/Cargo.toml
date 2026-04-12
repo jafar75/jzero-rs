@@ -1,10 +1,13 @@
 [package]
 name = "jzero-codegen"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "TAC and bytecode code generation for the Jzero compiler"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-jzero-ast     = { path = "../jzero-ast" }
-jzero-parser = { path = "../jzero-parser" }
-jzero-symtab  = { path = "../jzero-symtab" }
-jzero-semantic = { path = "../jzero-semantic" }
+jzero-ast     = { path = "../jzero-ast", version = "0.1.0" }
+jzero-parser = { path = "../jzero-parser", version = "0.1.0" }
+jzero-symtab  = { path = "../jzero-symtab", version = "0.1.0" }
+jzero-semantic = { path = "../jzero-semantic", version = "0.1.0" }

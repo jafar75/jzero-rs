@@ -1,5 +1,8 @@
 [package]
 name = "jzero-lexer"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "Lexer for the Jzero language (a subset of Java)"
 version = "0.1.0"
 edition = "2024"
 

@@ -1,5 +1,8 @@
 [package]
 name = "jzero-symtab"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "Symbol table types for the Jzero compiler"
 version = "0.1.0"
 edition = "2024"
 

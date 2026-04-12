@@ -1,7 +1,10 @@
 [package]
 name = "jzero-ast"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "Syntax tree data structures for the Jzero compiler"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-jzero-symtab = { path = "../jzero-symtab" }
+jzero-symtab = { path = "../jzero-symtab", version = "0.1.0" }

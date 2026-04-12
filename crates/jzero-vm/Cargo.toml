@@ -1,7 +1,10 @@
 [package]
 name    = "jzero-vm"
+license = "MIT"
+repository = "https://github.com/jafar75/jzero-rs"
+description = "Bytecode interpreter and VM for the Jzero language"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-jzero-codegen = { path = "../jzero-codegen" }
+jzero-codegen = { path = "../jzero-codegen", version = "0.1.0" }
