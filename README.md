@@ -72,9 +72,10 @@ jzero-rs/
 │   ├── jzero-vm/           # Bytecode interpreter + string pool
 │   └── jzero-cli/          # CLI tool (j0, not published)
 └── tests/
-    ├── hello.java           # Minimal hello-world test
-    ├── hello_loop.java      # End-to-end golden test (loop + array + I/O)
-    └── concat.java          # String concatenation test (Ch. 15)
+    └── examples/
+        ├── hello.java           # Minimal hello-world test
+        ├── hello_loop.java      # End-to-end golden test (loop + array + I/O)
+        └── concat.java          # String concatenation test (Ch. 15)
 ```
 
 Clean one-way dependency chain:
@@ -106,19 +107,19 @@ cargo build
 cargo test --workspace -- --test-threads=1
 
 # Parse a file and visualize the syntax tree
-cargo run --bin j0 -- tests/hello.java --png
+cargo run --bin j0 -- tests/examples/hello.java --png
 
 # Print TAC intermediate code (Chapter 9)
-cargo run --bin j0 -- tests/hello_loop.java --codegen
+cargo run --bin j0 -- tests/examples/hello_loop.java --codegen
 
 # Compile to bytecode and print assembler listing (Chapter 13)
-cargo run --bin j0 -- tests/hello_loop.java --bytecode
+cargo run --bin j0 -- tests/examples/hello_loop.java --bytecode
 
 # Compile and execute in the VM (Chapters 12+13)
-cargo run --bin j0 -- tests/hello_loop.java --run a b c d e
+cargo run --bin j0 -- tests/examples/hello_loop.java --run a b c d e
 
 # String concatenation example (Chapter 15)
-cargo run --bin j0 -- tests/concat.java --run
+cargo run --bin j0 -- tests/examples/concat.java --run
 ```
 
 ## End-to-End Examples
@@ -140,7 +141,7 @@ public class hello_loop {
 }
 ```
 
-Running `j0 tests/hello_loop.java --run a b c d e` executes the program end-to-end:
+Running `j0 tests/examples/hello_loop.java --run a b c d e` executes the program end-to-end:
 
 ```
 hello, jzero!
@@ -163,7 +164,7 @@ public class concat {
 }
 ```
 
-Running `j0 tests/concat.java --run` produces:
+Running `j0 tests/examples/concat.java --run` produces:
 
 ```
 hello, jzero!

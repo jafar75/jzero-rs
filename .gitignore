@@ -2,3 +2,8 @@
 .env
 Cargo.lock
 .idea
+
+# Generated CLI output
+tests/**/*.j0
+tests/**/*.dot
+tests/**/*.png
