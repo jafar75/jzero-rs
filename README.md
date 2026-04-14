@@ -73,9 +73,12 @@ jzero-rs/
 │   └── jzero-cli/          # CLI tool (j0, not published)
 └── tests/
     └── examples/
-        ├── hello.java           # Minimal hello-world test
-        ├── hello_loop.java      # End-to-end golden test (loop + array + I/O)
-        └── concat.java          # String concatenation test (Ch. 15)
+        ├── hello.java           # Minimal hello-world
+        ├── hello_loop.java      # Loop + array + I/O
+        ├── concat.java          # String concatenation
+        ├── countdown.java       # While loop + argv.length
+        ├── fizzbuzz.java        # Nested if/else + modulo + String.valueOf
+        └── greet.java           # String concatenation + String.valueOf
 ```
 
 Clean one-way dependency chain:
@@ -217,15 +220,16 @@ Word N…:  startup sequence + instructions
 
 The startup sequence calls `main` with the real `argc` (number of CLI arguments passed after `--run`), so `argv.length` behaves correctly without hardcoding.
 
-### Instruction set (26 opcodes)
+### Instruction set (27 opcodes)
 
 ```
 HALT NOOP ADD SUB MUL DIV MOD NEG PUSH POP CALL RETURN GOTO BIF
 LT LE GT GE EQ NEQ LOCAL LOAD STORE
-SPUSH SPOP SADD
+SPUSH SPOP SADD ITOS
 ```
 
-The last three (`SPUSH`, `SPOP`, `SADD`) were added in Chapter 15 for string operations.
+`SPUSH`, `SPOP`, `SADD` were added in Chapter 15 for string operations.
+`ITOS` converts an integer to a string pool key (`String.valueOf`).
 
 ### TAC → bytecode translation
 
@@ -237,6 +241,7 @@ The last three (`SPUSH`, `SPOP`, `SADD`) were added in Chapter 15 for string ope
 | `PARM arg` + `CALL fn,n` | `PUSH fn_addr, PUSH arg, …, CALL n` |
 | `Proc` (method entry) | `LOCAL n` (pre-allocates local slots) |
 | `SADD op1,op2,op3` | `SPUSH op2, SPUSH op3, SADD, SPOP op1` |
+| `String.valueOf(x)` | `ITOS op1,op2` (int → string pool key) |
 
 Label resolution is two-pass: pass 1 records byte offsets, pass 2 patches branch targets. All GOTO/BIF targets are relocated by `code_base_bytes` to be absolute offsets from word 0.
 
@@ -257,9 +262,10 @@ stack[bp+2] = local0   (loc:16)
 
 String concatenation (`+`) is implemented via a runtime `StringPool`:
 
-- **`SPUSH offset`** — reads a NUL-terminated string from the data section at `offset`, interns it in the pool, and pushes a negative integer key onto the stack.
+- **`SPUSH offset`** — reads a NUL-terminated string from the data section at `offset` (or resolves a pool key if the value is negative), interns it in the pool, and pushes a negative integer key onto the stack.
 - **`SADD`** — pops two pool keys, concatenates the strings, interns the result, and pushes the new key.
 - **`SPOP dst`** — pops a pool key and stores it in the destination stack slot.
+- **`ITOS`** — pops an integer, converts it to a decimal string via `String.valueOf`, interns it in the pool, and pushes the pool key.
 - **`do_println`** — resolves its argument via `resolve_string()`, which handles both data-section offsets (≥ 0) and pool keys (< 0) transparently.
 
 Pool keys are negative integers (`-1, -2, …`) so they are visually distinct from data-section offsets on the stack.

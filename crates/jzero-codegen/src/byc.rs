@@ -46,6 +46,8 @@ pub enum Op {
     Spop   = 25,
     /// Pop two strings, concatenate, push result.
     Sadd   = 26,
+
+    Itos   = 27,
 }
 
 impl Op {
@@ -77,6 +79,7 @@ impl Op {
             Op::Spush  => "spush",
             Op::Spop   => "spop",
             Op::Sadd   => "sadd",
+            Op::Itos   => "itos",
         }
     }
 
@@ -108,6 +111,7 @@ impl Op {
             24 => Some(Op::Spush),
             25 => Some(Op::Spop),
             26 => Some(Op::Sadd),
+            27 => Some(Op::Itos),
             _  => None,
         }
     }

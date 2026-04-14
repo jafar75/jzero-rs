@@ -199,6 +199,13 @@ fn pass1(icode: &[Tac]) -> (Vec<Byc>, HashMap<i64, usize>) {
             // Global / StringDecl — data-section declarations, no code emitted
             // ----------------------------------------------------------------
             TacOp::Global | TacOp::StringDecl => {}
+
+            TacOp::Itos => {
+                // PUSH the integer, ITOS converts TOS to a string pool key.
+                rv.push(Byc::new(Op::Push, instr.op2.as_ref()));
+                rv.push(Byc::no_operand(Op::Itos));
+                rv.push(Byc::new(Op::Pop,  instr.op1.as_ref()));
+            }
         }
     }
 

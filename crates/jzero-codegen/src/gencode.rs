@@ -88,15 +88,23 @@ fn gen_add_expr(tree: &Tree, ctx: &mut CodegenContext) {
     let rhs = addr_of(&tree.kids[2], ctx);
 
     // Choose opcode based on type: String + String → SADD, else ADD/SUB.
-    let op = match tree.typ.as_ref().map(|t| t.basetype()) {
-        Some(b) if b == "String" => {
-            if tree.rule != 0 {
-                // String subtraction is a semantic error — emit SADD anyway
-                // (the type checker already reported the error).
-            }
-            Op::Sadd
-        }
-        _ => if tree.rule == 0 { Op::Add } else { Op::Sub },
+    // Also check operand types in case tree.typ wasn't stamped (e.g. when
+    // one operand is String.valueOf() whose return type isn't propagated yet).
+    let is_string = tree.typ.as_ref().map(|t| t.basetype() == "String")
+        .unwrap_or(false)
+        || tree.kids.get(0).and_then(|k| k.typ.as_ref())
+            .map(|t| t.basetype() == "String")
+            .unwrap_or(false)
+        || tree.kids.get(2).and_then(|k| k.typ.as_ref())
+            .map(|t| t.basetype() == "String")
+            .unwrap_or(false);
+
+    let op = if is_string {
+        Op::Sadd
+    } else if tree.rule == 0 {
+        Op::Add
+    } else {
+        Op::Sub
     };
 
     let mut icode = concat_kids_icode(tree, ctx);
@@ -272,6 +280,27 @@ fn gen_instance_creation(tree: &Tree, ctx: &mut CodegenContext) {
 fn gen_method_call_field(tree: &Tree, ctx: &mut CodegenContext) {
     let fa = &tree.kids[0];
     let (base_chain, method_name) = split_field_chain(fa);
+    
+    // ── String.valueOf(x) → ITOS ─────────────────────────────────────────
+    if base_chain == ["String"] && method_name == "valueOf" {
+        // Recurse into the single argument only.
+        if let Some(arg) = tree.kids.get(1) {
+            gencode(arg, ctx);
+        }
+        let dst = ctx.genlocal();
+        let arg_addr = tree.kids.get(1)
+            .map(|k| addr_of(k, ctx))
+            .unwrap_or(Address::imm(0));
+        let mut icode = tree.kids.get(1)
+            .map(|k| take_icode(k, ctx))
+            .unwrap_or_default();
+        icode.push(Tac::new2(Op::Itos, dst.clone(), arg_addr));
+        let info = ctx.node_mut(tree.id);
+        info.icode = icode;
+        info.addr  = Some(dst);
+        return;
+    }
+    
     let mangled = mangle_method(&base_chain, &method_name);
 
     // Recurse into args only — no recursion into the method chain at all.
@@ -321,6 +350,27 @@ fn gen_method_call(tree: &Tree, ctx: &mut CodegenContext) {
         let method_name = tree.kids[1].tok.as_ref()
             .map(|t| t.text.as_str()).unwrap_or("unknown");
         let base_chain = collect_field_chain(&tree.kids[0]);
+
+        // ── String.valueOf(x) → ITOS ──────────────────────────────────────
+        if base_chain == ["String"] && method_name == "valueOf" {
+            if let Some(arg) = tree.kids.get(2) {
+                gencode(arg, ctx);
+            }
+            let dst      = ctx.genlocal();
+            let arg_addr = tree.kids.get(2)
+                .map(|k| addr_of(k, ctx))
+                .unwrap_or(Address::imm(0));
+            let mut icode = tree.kids.get(2)
+                .map(|k| take_icode(k, ctx))
+                .unwrap_or_default();
+            icode.push(Tac::new2(Op::Itos, dst.clone(), arg_addr));
+            let info = ctx.node_mut(tree.id);
+            info.icode = icode;
+            info.addr  = Some(dst);
+            return;
+        }
+        // ─────────────────────────────────────────────────────────────────
+
         let mangled    = mangle_method(&base_chain, method_name);
         let args_start = 2usize;
         let n_args     = (tree.kids.len() - args_start) as i64;
@@ -394,10 +444,12 @@ fn gen_return(tree: &Tree, ctx: &mut CodegenContext) {
 fn gen_if_then(tree: &Tree, ctx: &mut CodegenContext) {
     if tree.kids.len() < 2 { return default_concat(tree, ctx); }
     let cond_first = ctx.node(tree.kids[0].id).and_then(|n| n.first.clone());
+    let on_true    = ctx.node(tree.kids[0].id).and_then(|n| n.on_true.clone());
     let follow     = ctx.node(tree.id).and_then(|n| n.follow.clone());
     let mut icode  = vec![];
     if let Some(f) = cond_first { icode.push(Tac::new1(Op::Lab, f)); }
     icode.extend(take_icode(&tree.kids[0], ctx));
+    if let Some(t) = on_true    { icode.push(Tac::new1(Op::Lab, t)); }
     icode.extend(take_icode(&tree.kids[1], ctx));
     if let Some(f) = follow     { icode.push(Tac::new1(Op::Lab, f)); }
     ctx.node_mut(tree.id).icode = icode;
@@ -406,11 +458,13 @@ fn gen_if_then(tree: &Tree, ctx: &mut CodegenContext) {
 fn gen_if_then_else(tree: &Tree, ctx: &mut CodegenContext) {
     if tree.kids.len() < 3 { return default_concat(tree, ctx); }
     let cond_first = ctx.node(tree.kids[0].id).and_then(|n| n.first.clone());
+    let on_true    = ctx.node(tree.kids[0].id).and_then(|n| n.on_true.clone());
     let else_first = ctx.node(tree.kids[2].id).and_then(|n| n.first.clone());
     let follow     = ctx.node(tree.id).and_then(|n| n.follow.clone());
     let mut icode  = vec![];
     if let Some(f) = cond_first     { icode.push(Tac::new1(Op::Lab, f)); }
     icode.extend(take_icode(&tree.kids[0], ctx));
+    if let Some(t) = on_true        { icode.push(Tac::new1(Op::Lab, t)); }
     icode.extend(take_icode(&tree.kids[1], ctx));
     if let Some(f) = follow.clone() { icode.push(Tac::new1(Op::Goto, f)); }
     if let Some(f) = else_first     { icode.push(Tac::new1(Op::Lab, f)); }

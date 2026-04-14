@@ -124,6 +124,8 @@ impl J0Machine {
         let first_word_off   = read_i64(bytes, 16) as usize;
         let first_instr_byte = first_word_off * 8;
 
+        eprintln!("DEBUG: first_word_off={} first_instr_byte={}", first_word_off, first_instr_byte);
+
         if first_instr_byte > bytes.len() {
             return Err("first-instruction offset out of range".into());
         }
@@ -183,8 +185,8 @@ impl J0Machine {
                 //        the NUL-terminated string, intern it in the pool,
                 //        and push the negative pool key.
                 Op::Spush => {
-                    let offset = self.deref(byc.region, byc.opnd)? as usize;
-                    let s = self.read_string(offset)?;
+                    let val = self.deref(byc.region, byc.opnd)?;
+                    let s = self.resolve_string(val);
                     let key = self.spool.put(s);
                     self.push(key);
                 }
@@ -265,6 +267,8 @@ impl J0Machine {
                     let fn_slot = self.sp - n;
                     let f       = self.stack[fn_slot as usize];
 
+                    eprintln!("DEBUG CALL: sp={} n={} fn_slot={} f={}", self.sp, n, fn_slot, f);
+
                     if f >= 0 {
                         self.call_stack.push((self.ip, self.bp, fn_slot));
                         self.bp = fn_slot;
@@ -280,6 +284,12 @@ impl J0Machine {
                     self.ip = saved_ip;
                     self.bp = saved_bp;
                     self.sp = fn_slot - 1;
+                }
+                Op::Itos => {
+                    let n   = self.pop();
+                    let s   = n.to_string();
+                    let key = self.spool.put(s);
+                    self.push(key);
                 }
             }
         }

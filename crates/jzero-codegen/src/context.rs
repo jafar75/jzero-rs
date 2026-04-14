@@ -114,7 +114,8 @@ impl CodegenContext {
         }
         let lab   = self.genlabel();
         let offset = self.strings_offset;
-        self.strings_offset += 8;
+        let padded = (value.len() + 1 + 7) & !7;
+        self.strings_offset += padded as i64;
         self.strings.push(StringEntry {
             label: lab,
             string_offset: offset,

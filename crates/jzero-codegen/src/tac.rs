@@ -103,6 +103,9 @@ pub enum Op {
     /// Return (from current method); op1 is optional return value
     Ret,
 
+    /// op1 = String.valueOf(op2)  — convert integer to string pool key
+    Itos,
+
     // ── Declarations (pseudo-instructions) ──────────────────────────────────
     /// Declare a global variable: name at address op1
     Global,
@@ -141,6 +144,7 @@ impl std::fmt::Display for Op {
             Op::Parm       => "PARM",
             Op::Call       => "CALL",
             Op::Ret        => "RET",
+            Op::Itos       => "ITOS",
             Op::Global     => "global",
             Op::StringDecl => "string",
             Op::Proc       => "proc",
