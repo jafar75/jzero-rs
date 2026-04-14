@@ -3,7 +3,7 @@ name = "jzero-codegen"
 license = "MIT"
 repository = "https://github.com/jafar75/jzero-rs"
 description = "TAC and bytecode code generation for the Jzero compiler"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
