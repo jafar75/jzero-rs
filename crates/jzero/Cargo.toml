@@ -2,11 +2,12 @@
 name    = "jzero"
 license = "MIT"
 repository = "https://github.com/jafar75/jzero-rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A compiler and bytecode VM for the Jzero language (a subset of Java)"
 keywords    = ["compiler", "bytecode", "interpreter", "language", "jzero"]
 categories  = ["compilers"]
+readme = "../../README.md"
 
 [dependencies]
 jzero-ast      = { path = "../jzero-ast", version = "0.1.0" }
